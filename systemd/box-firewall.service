@@ -1,0 +1,16 @@
+[Unit]
+Description=Box Linux Firewall Manager
+PartOf=box.service
+After=network-online.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/bin/boxctl firewall enable
+ExecStop=/usr/bin/boxctl firewall disable
+ExecReload=/usr/bin/boxctl firewall renew
+TimeoutStartSec=60
+TimeoutStopSec=30
+
+[Install]
+WantedBy=multi-user.target

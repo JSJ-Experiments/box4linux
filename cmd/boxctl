@@ -1,0 +1,45 @@
+#!/usr/bin/env bash
+
+# shellcheck shell=bash
+
+set -euo pipefail
+
+CMD_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+LIB_DIR="$(cd "${CMD_DIR}/../lib" && pwd)"
+
+source "${LIB_DIR}/common.sh"
+source "${LIB_DIR}/config.sh"
+source "${LIB_DIR}/supervisor/supervisor.sh"
+source "${LIB_DIR}/firewall/firewall.sh"
+
+usage() {
+  cat <<'EOF'
+Usage:
+  boxctl service <start|stop|restart|status>
+  boxctl firewall <enable|disable|renew|status>
+EOF
+}
+
+main() {
+  local component="${1:-}"
+  local action="${2:-}"
+
+  case "${component}" in
+    service)
+      supervisor_cmd "${action}"
+      ;;
+    firewall)
+      firewall_cmd "${action}"
+      ;;
+    -h|--help|help|"")
+      usage
+      ;;
+    *)
+      printf 'unknown component: %s\n' "${component}" >&2
+      usage >&2
+      return 2
+      ;;
+  esac
+}
+
+main "$@"
