@@ -1,0 +1,61 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+STATE_FILE="${MOCK_IP_STATE:?MOCK_IP_STATE is required}"
+mkdir -p "$(dirname "${STATE_FILE}")"
+touch "${STATE_FILE}"
+
+cmd="${1:-}"
+subcmd="${2:-}"
+shift 2 || true
+
+case "${cmd}:${subcmd}" in
+  rule:list)
+    grep -F "RULE|" "${STATE_FILE}" | sed 's/^RULE|//' || true
+    ;;
+  rule:add)
+    rule="$*"
+    if ! grep -Fqx "RULE|${rule}" "${STATE_FILE}"; then
+      printf 'RULE|%s\n' "${rule}" >>"${STATE_FILE}"
+    fi
+    ;;
+  rule:del)
+    rule="$*"
+    if [[ "${1:-}" == "pref" && -n "${2:-}" ]]; then
+      pref="${2}"
+      grep -Ev "RULE\\|.*(^| )pref ${pref}( |$)" "${STATE_FILE}" >"${STATE_FILE}.tmp" || true
+    else
+      grep -Fv "RULE|${rule}" "${STATE_FILE}" >"${STATE_FILE}.tmp" || true
+    fi
+    mv "${STATE_FILE}.tmp" "${STATE_FILE}"
+    ;;
+  route:show)
+    if [[ "${1:-}" == "table" ]]; then
+      table="${2:-main}"
+      grep -F "ROUTE|${table}|" "${STATE_FILE}" | sed "s/^ROUTE|${table}|//" || true
+    fi
+    ;;
+  route:add)
+    route="$*"
+    table="main"
+    if [[ "${*}" == *" table "* ]]; then
+      table="${*: -1}"
+    fi
+    if ! grep -Fqx "ROUTE|${table}|${route}" "${STATE_FILE}"; then
+      printf 'ROUTE|%s|%s\n' "${table}" "${route}" >>"${STATE_FILE}"
+    fi
+    ;;
+  route:del)
+    route="$*"
+    table="main"
+    if [[ "${*}" == *" table "* ]]; then
+      table="${*: -1}"
+    fi
+    grep -Fv "ROUTE|${table}|${route}" "${STATE_FILE}" >"${STATE_FILE}.tmp" || true
+    mv "${STATE_FILE}.tmp" "${STATE_FILE}"
+    ;;
+  *)
+    exit 0
+    ;;
+esac

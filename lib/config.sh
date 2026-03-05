@@ -4,14 +4,22 @@
 
 set -euo pipefail
 
-BOX_CONFIG_FILE=""
-BOX_CONFIG_SOURCE=""
+BOX_CONFIG_FILE="${BOX_CONFIG_FILE:-}"
+BOX_CONFIG_SOURCE="${BOX_CONFIG_SOURCE:-}"
 
 BOX_CORE="mihomo"
 BOX_NETWORK_MODE="tun"
 BOX_TPROXY_PORT="9898"
 BOX_REDIR_PORT="9797"
+BOX_DNS_PORT="1053"
 BOX_DNS_HIJACK_MODE="tproxy"
+BOX_DNS_COEXIST_MODE="preserve_tailnet"
+BOX_TAILSCALE_IFACE="tailscale0"
+BOX_TAILNET_IPV4_CIDR="100.64.0.0/10"
+BOX_TAILNET_IPV6_CIDR="fd7a:115c:a1e0::/48"
+BOX_TAILSCALE_DNS_RESOLVER="100.100.100.100"
+BOX_TAILSCALE_FWMARK="0x80000/0xff0000"
+BOX_TAILSCALE_ROUTE_TABLE="52"
 
 BOX_FIREWALL_BACKEND="iptables"
 BOX_ROUTE_TABLE="2024"
@@ -27,7 +35,15 @@ config_defaults() {
   BOX_NETWORK_MODE="tun"
   BOX_TPROXY_PORT="9898"
   BOX_REDIR_PORT="9797"
+  BOX_DNS_PORT="1053"
   BOX_DNS_HIJACK_MODE="tproxy"
+  BOX_DNS_COEXIST_MODE="preserve_tailnet"
+  BOX_TAILSCALE_IFACE="tailscale0"
+  BOX_TAILNET_IPV4_CIDR="100.64.0.0/10"
+  BOX_TAILNET_IPV6_CIDR="fd7a:115c:a1e0::/48"
+  BOX_TAILSCALE_DNS_RESOLVER="100.100.100.100"
+  BOX_TAILSCALE_FWMARK="0x80000/0xff0000"
+  BOX_TAILSCALE_ROUTE_TABLE="52"
   BOX_FIREWALL_BACKEND="iptables"
   BOX_ROUTE_TABLE="2024"
   BOX_ROUTE_PREF="100"
@@ -159,6 +175,43 @@ validate_config() {
     log "ERROR" "config" "E_CONFIG_PORT" "invalid redirect port: ${BOX_REDIR_PORT}"
     return "${E_CONFIG}"
   fi
+  if ! validate_port "${BOX_DNS_PORT}"; then
+    log "ERROR" "config" "E_CONFIG_PORT" "invalid dns port: ${BOX_DNS_PORT}"
+    return "${E_CONFIG}"
+  fi
+
+  case "${BOX_DNS_HIJACK_MODE}" in
+    tproxy|redirect|disable) ;;
+    *)
+      log "ERROR" "config" "E_CONFIG_DNS_MODE" "invalid dns_hijack_mode: ${BOX_DNS_HIJACK_MODE}"
+      return "${E_CONFIG}"
+      ;;
+  esac
+
+  case "${BOX_DNS_COEXIST_MODE}" in
+    preserve_tailnet|strict_box) ;;
+    *)
+      log "ERROR" "config" "E_CONFIG_DNS_COEXIST" "invalid dns_coexist_mode: ${BOX_DNS_COEXIST_MODE}"
+      return "${E_CONFIG}"
+      ;;
+  esac
+
+  if [[ "${BOX_ROUTE_TABLE}" == "${BOX_TAILSCALE_ROUTE_TABLE}" ]]; then
+    log "ERROR" "config" "E_CONFIG_ROUTE_TABLE" \
+      "box route_table (${BOX_ROUTE_TABLE}) must differ from tailscale_route_table (${BOX_TAILSCALE_ROUTE_TABLE})"
+    return "${E_CONFIG}"
+  fi
+
+  if [[ "${BOX_FWMARK}" == "${BOX_TAILSCALE_FWMARK}" ]]; then
+    log "ERROR" "config" "E_CONFIG_FWMARK" \
+      "box fwmark (${BOX_FWMARK}) must differ from tailscale_fwmark (${BOX_TAILSCALE_FWMARK})"
+    return "${E_CONFIG}"
+  fi
+
+  if [[ -z "${BOX_TAILSCALE_IFACE}" || -z "${BOX_TAILNET_IPV4_CIDR}" || -z "${BOX_TAILSCALE_DNS_RESOLVER}" ]]; then
+    log "ERROR" "config" "E_CONFIG_TAILSCALE" "tailscale coexist fields must not be empty"
+    return "${E_CONFIG}"
+  fi
 }
 
 load_config() {
@@ -168,7 +221,8 @@ load_config() {
     log "WARN" "config" "W_CONFIG_DEFAULTS" "no box.toml found; using defaults"
     validate_config
     export BOX_CONFIG_FILE BOX_CONFIG_SOURCE
-    export BOX_CORE BOX_NETWORK_MODE BOX_TPROXY_PORT BOX_REDIR_PORT BOX_DNS_HIJACK_MODE
+    export BOX_CORE BOX_NETWORK_MODE BOX_TPROXY_PORT BOX_REDIR_PORT BOX_DNS_PORT BOX_DNS_HIJACK_MODE BOX_DNS_COEXIST_MODE
+    export BOX_TAILSCALE_IFACE BOX_TAILNET_IPV4_CIDR BOX_TAILNET_IPV6_CIDR BOX_TAILSCALE_DNS_RESOLVER BOX_TAILSCALE_FWMARK BOX_TAILSCALE_ROUTE_TABLE
     export BOX_FIREWALL_BACKEND BOX_ROUTE_TABLE BOX_ROUTE_PREF BOX_FWMARK
     export BOX_CORE_BIN_DIR BOX_CORE_WORKDIR BOX_CORE_CONFIG_SOURCE
     return 0
@@ -184,7 +238,15 @@ load_config() {
   BOX_NETWORK_MODE="$(config_read_value "${BOX_CONFIG_FILE}" "network" "mode" || printf '%s' "${BOX_NETWORK_MODE}")"
   BOX_TPROXY_PORT="$(config_read_value "${BOX_CONFIG_FILE}" "network" "tproxy_port" || printf '%s' "${BOX_TPROXY_PORT}")"
   BOX_REDIR_PORT="$(config_read_value "${BOX_CONFIG_FILE}" "network" "redir_port" || printf '%s' "${BOX_REDIR_PORT}")"
+  BOX_DNS_PORT="$(config_read_value "${BOX_CONFIG_FILE}" "network" "dns_port" || printf '%s' "${BOX_DNS_PORT}")"
   BOX_DNS_HIJACK_MODE="$(config_read_value "${BOX_CONFIG_FILE}" "network" "dns_hijack_mode" || printf '%s' "${BOX_DNS_HIJACK_MODE}")"
+  BOX_DNS_COEXIST_MODE="$(config_read_value "${BOX_CONFIG_FILE}" "network" "dns_coexist_mode" || printf '%s' "${BOX_DNS_COEXIST_MODE}")"
+  BOX_TAILSCALE_IFACE="$(config_read_value "${BOX_CONFIG_FILE}" "network" "tailscale_iface" || printf '%s' "${BOX_TAILSCALE_IFACE}")"
+  BOX_TAILNET_IPV4_CIDR="$(config_read_value "${BOX_CONFIG_FILE}" "network" "tailnet_ipv4_cidr" || printf '%s' "${BOX_TAILNET_IPV4_CIDR}")"
+  BOX_TAILNET_IPV6_CIDR="$(config_read_value "${BOX_CONFIG_FILE}" "network" "tailnet_ipv6_cidr" || printf '%s' "${BOX_TAILNET_IPV6_CIDR}")"
+  BOX_TAILSCALE_DNS_RESOLVER="$(config_read_value "${BOX_CONFIG_FILE}" "network" "tailscale_dns_resolver" || printf '%s' "${BOX_TAILSCALE_DNS_RESOLVER}")"
+  BOX_TAILSCALE_FWMARK="$(config_read_value "${BOX_CONFIG_FILE}" "network" "tailscale_fwmark" || printf '%s' "${BOX_TAILSCALE_FWMARK}")"
+  BOX_TAILSCALE_ROUTE_TABLE="$(config_read_value "${BOX_CONFIG_FILE}" "network" "tailscale_route_table" || printf '%s' "${BOX_TAILSCALE_ROUTE_TABLE}")"
 
   BOX_FIREWALL_BACKEND="$(config_read_value "${BOX_CONFIG_FILE}" "firewall" "backend" || printf '%s' "${BOX_FIREWALL_BACKEND}")"
   BOX_ROUTE_TABLE="$(config_read_value "${BOX_CONFIG_FILE}" "firewall" "route_table" || printf '%s' "${BOX_ROUTE_TABLE}")"
@@ -193,8 +255,13 @@ load_config() {
 
   validate_config
 
+  if [[ "${BOX_CORE}" == "sing-box" && "${BOX_CORE_CONFIG_SOURCE}" == "/etc/box/profiles/config.yaml" ]]; then
+    BOX_CORE_CONFIG_SOURCE="/etc/box/profiles/config.json"
+  fi
+
   export BOX_CONFIG_FILE BOX_CONFIG_SOURCE
-  export BOX_CORE BOX_NETWORK_MODE BOX_TPROXY_PORT BOX_REDIR_PORT BOX_DNS_HIJACK_MODE
+  export BOX_CORE BOX_NETWORK_MODE BOX_TPROXY_PORT BOX_REDIR_PORT BOX_DNS_PORT BOX_DNS_HIJACK_MODE BOX_DNS_COEXIST_MODE
+  export BOX_TAILSCALE_IFACE BOX_TAILNET_IPV4_CIDR BOX_TAILNET_IPV6_CIDR BOX_TAILSCALE_DNS_RESOLVER BOX_TAILSCALE_FWMARK BOX_TAILSCALE_ROUTE_TABLE
   export BOX_FIREWALL_BACKEND BOX_ROUTE_TABLE BOX_ROUTE_PREF BOX_FWMARK
   export BOX_CORE_BIN_DIR BOX_CORE_WORKDIR BOX_CORE_CONFIG_SOURCE
 }

@@ -1,0 +1,12 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+if [[ "${1:-}" == "-t" ]]; then
+  exit 0
+fi
+
+trap 'exit 0' TERM INT
+while true; do
+  sleep 1
+done

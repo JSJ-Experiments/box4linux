@@ -15,14 +15,20 @@ source "${LIB_DIR}/firewall/firewall.sh"
 usage() {
   cat <<'EOF'
 Usage:
-  boxctl service <start|stop|restart|status>
-  boxctl firewall <enable|disable|renew|status>
+  boxctl service <start|stop|restart|status> [--json]
+  boxctl firewall <enable|disable|renew|status> [--json]
 EOF
 }
 
 main() {
   local component="${1:-}"
   local action="${2:-}"
+  local format_flag="${3:-}"
+
+  if [[ "${format_flag}" == "--json" ]]; then
+    BOX_OUTPUT_FORMAT="json"
+    export BOX_OUTPUT_FORMAT
+  fi
 
   case "${component}" in
     service)

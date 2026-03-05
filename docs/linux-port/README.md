@@ -14,6 +14,8 @@ All new Linux-native implementation code should live at repository root (`cmd/`,
 - `06-component-network-policy-watchers.md`
 - `07-component-installer-packaging.md`
 - `08-delivery-plan-and-risk-register.md`
+- `09-phase2-firewall-supervisor-tests.md`
+- `10-steering-prompt-tailscale-dns.md`
 
 ## Source Baseline
 All analysis is based on:

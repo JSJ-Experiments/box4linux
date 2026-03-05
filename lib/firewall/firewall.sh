@@ -12,32 +12,35 @@ firewall_state_file() {
 }
 
 firewall_write_state() {
-  local state_file mode status
-  mode="${1:?missing mode}"
-  status="${2:?missing status}"
+  local mode="${1:?missing mode}"
+  local status="${2:?missing status}"
+  local state_file
   state_file="$(firewall_state_file)"
   cat >"${state_file}" <<EOF
 mode=${mode}
 status=${status}
 backend=${BOX_FIREWALL_BACKEND}
+dns_hijack_mode=${BOX_DNS_HIJACK_MODE}
+dns_coexist_mode=${BOX_DNS_COEXIST_MODE}
 route_table=${BOX_ROUTE_TABLE}
 route_pref=${BOX_ROUTE_PREF}
 fwmark=${BOX_FWMARK}
+tailscale_iface=${BOX_TAILSCALE_IFACE}
+tailscale_dns_resolver=${BOX_TAILSCALE_DNS_RESOLVER}
+tailscale_fwmark=${BOX_TAILSCALE_FWMARK}
+tailscale_route_table=${BOX_TAILSCALE_ROUTE_TABLE}
 timestamp=$(timestamp_utc)
 EOF
 }
 
-firewall_print_state() {
+firewall_read_state_value() {
+  local key="${1:?missing key}"
   local state_file
   state_file="$(firewall_state_file)"
-
-  if [[ -f "${state_file}" ]]; then
-    cat "${state_file}"
-  else
-    printf 'status=disabled\n'
-    printf 'mode=%s\n' "${BOX_NETWORK_MODE}"
-    printf 'backend=%s\n' "${BOX_FIREWALL_BACKEND}"
+  if [[ ! -f "${state_file}" ]]; then
+    return 1
   fi
+  awk -F= -v k="${key}" '$1==k {print substr($0, index($0, "=")+1); exit}' "${state_file}"
 }
 
 firewall_enable_locked() {
@@ -46,7 +49,10 @@ firewall_enable_locked() {
 
   case "${BOX_FIREWALL_BACKEND}" in
     iptables)
-      backend_iptables_apply_mode "${BOX_NETWORK_MODE}"
+      if ! backend_iptables_apply_mode "${BOX_NETWORK_MODE}"; then
+        log "ERROR" "firewall" "E_FW_APPLY" "firewall apply failed: ${FW_LAST_ERROR:-unknown}"
+        return "${E_FIREWALL_APPLY}"
+      fi
       ;;
     *)
       log "ERROR" "firewall" "E_FW_BACKEND" "unsupported firewall backend: ${BOX_FIREWALL_BACKEND}"
@@ -55,7 +61,8 @@ firewall_enable_locked() {
   esac
 
   firewall_write_state "${BOX_NETWORK_MODE}" "enabled"
-  log "INFO" "firewall" "FW_ENABLED" "firewall enabled with mode=${BOX_NETWORK_MODE} backend=${BOX_FIREWALL_BACKEND}"
+  log "INFO" "firewall" "FW_ENABLED" \
+    "firewall enabled mode=${BOX_NETWORK_MODE} dns=${BOX_DNS_HIJACK_MODE} backend=${BOX_FIREWALL_BACKEND}"
 }
 
 firewall_disable_locked() {
@@ -81,28 +88,85 @@ firewall_disable() {
   with_lock "firewall" 30 firewall_disable_locked
 }
 
-firewall_renew() {
-  with_lock "firewall" 30 firewall_renew_locked
-}
-
 firewall_renew_locked() {
   require_root || return 1
   firewall_disable_locked
   firewall_enable_locked
 }
 
+firewall_renew() {
+  with_lock "firewall" 30 firewall_renew_locked
+}
+
+firewall_status_text() {
+  local current_status current_mode
+  current_status="$(firewall_read_state_value "status" || printf 'disabled')"
+  current_mode="$(firewall_read_state_value "mode" || printf '%s' "${BOX_NETWORK_MODE}")"
+
+  backend_iptables_collect_status
+
+  printf 'status=%s\n' "${current_status}"
+  printf 'mode=%s\n' "${current_mode}"
+  printf 'backend=%s\n' "${BOX_FIREWALL_BACKEND}"
+  printf 'dns_hijack_mode=%s\n' "${BOX_DNS_HIJACK_MODE}"
+  printf 'dns_coexist_mode=%s\n' "${BOX_DNS_COEXIST_MODE}"
+  printf 'tailscale_iface=%s\n' "${BOX_TAILSCALE_IFACE}"
+  printf 'tailscale_dns_resolver=%s\n' "${BOX_TAILSCALE_DNS_RESOLVER}"
+  printf 'tailscale_fwmark=%s\n' "${BOX_TAILSCALE_FWMARK}"
+  printf 'tailscale_route_table=%s\n' "${BOX_TAILSCALE_ROUTE_TABLE}"
+  printf 'tailscale_bypass_applied=%s\n' "${FW_TAILSCALE_BYPASS_APPLIED}"
+  printf 'cap_tproxy=%s\n' "${FW_CAP_TPROXY}"
+  printf 'tailscale_mark_rule=%s\n' "${FW_TAILSCALE_MARK_RULE}"
+  printf 'tailscale_table_present=%s\n' "${FW_TAILSCALE_TABLE_PRESENT}"
+  printf 'chain_mangle=%s\n' "${FW_CHAIN_MANGLE}"
+  printf 'chain_nat=%s\n' "${FW_CHAIN_NAT}"
+  printf 'chain_dns_mangle=%s\n' "${FW_CHAIN_DNS_MANGLE}"
+  printf 'chain_dns_nat=%s\n' "${FW_CHAIN_DNS_NAT}"
+  printf 'route_rule=%s\n' "${FW_ROUTE_RULE}"
+  printf 'route_table_installed=%s\n' "${FW_ROUTE_TABLE_INSTALLED}"
+  if [[ -n "${FW_LAST_ERROR}" ]]; then
+    printf 'error=%s\n' "${FW_LAST_ERROR}"
+  fi
+}
+
+firewall_status_json() {
+  local current_status current_mode
+  current_status="$(firewall_read_state_value "status" || printf 'disabled')"
+  current_mode="$(firewall_read_state_value "mode" || printf '%s' "${BOX_NETWORK_MODE}")"
+
+  backend_iptables_collect_status
+
+  printf '{%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s}\n' \
+    "$(json_pair "status" "${current_status}")" \
+    "$(json_pair "mode" "${current_mode}")" \
+    "$(json_pair "backend" "${BOX_FIREWALL_BACKEND}")" \
+    "$(json_pair "dns_hijack_mode" "${BOX_DNS_HIJACK_MODE}")" \
+    "$(json_pair "dns_coexist_mode" "${BOX_DNS_COEXIST_MODE}")" \
+    "$(json_pair "dns_coexist_mode_active" "${BOX_DNS_COEXIST_MODE}")" \
+    "$(json_pair "tailscale_iface" "${BOX_TAILSCALE_IFACE}")" \
+    "$(json_pair "tailscale_dns_resolver" "${BOX_TAILSCALE_DNS_RESOLVER}")" \
+    "$(json_pair "tailscale_fwmark" "${BOX_TAILSCALE_FWMARK}")" \
+    "$(json_pair "tailscale_route_table" "${BOX_TAILSCALE_ROUTE_TABLE}")" \
+    "$(json_bool_pair "backend_available" "${FW_BACKEND_AVAILABLE}")" \
+    "$(json_bool_pair "cap_tproxy" "${FW_CAP_TPROXY}")" \
+    "$(json_bool_pair "tailscale_bypass_applied" "${FW_TAILSCALE_BYPASS_APPLIED}")" \
+    "$(json_bool_pair "tailscale_mark_rule" "${FW_TAILSCALE_MARK_RULE}")" \
+    "$(json_bool_pair "tailscale_table_present" "${FW_TAILSCALE_TABLE_PRESENT}")" \
+    "$(json_bool_pair "chain_mangle" "${FW_CHAIN_MANGLE}")" \
+    "$(json_bool_pair "chain_nat" "${FW_CHAIN_NAT}")" \
+    "$(json_bool_pair "chain_dns_mangle" "${FW_CHAIN_DNS_MANGLE}")" \
+    "$(json_bool_pair "chain_dns_nat" "${FW_CHAIN_DNS_NAT}")" \
+    "$(json_bool_pair "route_rule" "${FW_ROUTE_RULE}")" \
+    "$(json_bool_pair "route_table_installed" "${FW_ROUTE_TABLE_INSTALLED}")"
+}
+
 firewall_status() {
   load_config || true
-  firewall_print_state
-
-  case "${BOX_FIREWALL_BACKEND}" in
-    iptables)
-      backend_iptables_status
-      ;;
-    *)
-      printf 'backend=%s available=false reason="unsupported backend"\n' "${BOX_FIREWALL_BACKEND}"
-      ;;
-  esac
+  if [[ "${BOX_OUTPUT_FORMAT}" == "json" ]]; then
+    firewall_status_json
+  else
+    firewall_status_text
+  fi
 }
 
 firewall_cmd() {
@@ -113,7 +177,7 @@ firewall_cmd() {
     renew) firewall_renew ;;
     status) firewall_status ;;
     *)
-      printf 'usage: boxctl firewall <enable|disable|renew|status>\n' >&2
+      printf 'usage: boxctl firewall <enable|disable|renew|status> [--json]\n' >&2
       return 2
       ;;
   esac

@@ -1,0 +1,95 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+STATE_FILE="${MOCK_IPTABLES_STATE:?MOCK_IPTABLES_STATE is required}"
+mkdir -p "$(dirname "${STATE_FILE}")"
+touch "${STATE_FILE}"
+
+table="filter"
+args=("$@")
+idx=0
+while (( idx < ${#args[@]} )); do
+  if [[ "${args[idx]}" == "-t" ]]; then
+    table="${args[idx+1]}"
+    unset 'args[idx]' 'args[idx+1]'
+    break
+  fi
+  idx=$((idx + 1))
+done
+
+clean_args=()
+for item in "${args[@]}"; do
+  [[ -n "${item:-}" ]] && clean_args+=("${item}")
+done
+args=("${clean_args[@]}")
+
+if [[ "${args[*]}" == *"TPROXY --help"* ]]; then
+  exit 0
+fi
+
+chain_exists() {
+  local chain="$1"
+  grep -Fqx "CHAIN|${table}|${chain}" "${STATE_FILE}"
+}
+
+rule_exists() {
+  local chain="$1"
+  local rule="$2"
+  grep -Fqx "RULE|${table}|${chain}|${rule}" "${STATE_FILE}"
+}
+
+case "${args[0]:-}" in
+  -S)
+    if [[ "${#args[@]}" -eq 1 ]]; then
+      grep -F "CHAIN|${table}|" "${STATE_FILE}" | sed "s/^CHAIN|${table}|/-N /" || true
+      exit 0
+    fi
+    chain="${args[1]}"
+    if ! chain_exists "${chain}"; then
+      exit 1
+    fi
+    printf -- '-N %s\n' "${chain}"
+    grep -F "RULE|${table}|${chain}|" "${STATE_FILE}" | sed "s/^RULE|${table}|${chain}|/-A ${chain} /" || true
+    ;;
+  -N)
+    chain="${args[1]}"
+    if chain_exists "${chain}"; then
+      exit 1
+    fi
+    printf 'CHAIN|%s|%s\n' "${table}" "${chain}" >>"${STATE_FILE}"
+    ;;
+  -X)
+    chain="${args[1]}"
+    grep -Fv "CHAIN|${table}|${chain}" "${STATE_FILE}" >"${STATE_FILE}.tmp" || true
+    grep -Fv "RULE|${table}|${chain}|" "${STATE_FILE}.tmp" >"${STATE_FILE}.tmp2" || true
+    mv "${STATE_FILE}.tmp2" "${STATE_FILE}"
+    rm -f "${STATE_FILE}.tmp"
+    ;;
+  -F)
+    chain="${args[1]}"
+    grep -Fv "RULE|${table}|${chain}|" "${STATE_FILE}" >"${STATE_FILE}.tmp" || true
+    mv "${STATE_FILE}.tmp" "${STATE_FILE}"
+    ;;
+  -A)
+    chain="${args[1]}"
+    rule="${args[*]:2}"
+    if ! rule_exists "${chain}" "${rule}"; then
+      printf 'RULE|%s|%s|%s\n' "${table}" "${chain}" "${rule}" >>"${STATE_FILE}"
+    fi
+    ;;
+  -C)
+    chain="${args[1]}"
+    rule="${args[*]:2}"
+    rule_exists "${chain}" "${rule}"
+    ;;
+  -D)
+    chain="${args[1]}"
+    rule="${args[*]:2}"
+    grep -Fv "RULE|${table}|${chain}|${rule}" "${STATE_FILE}" >"${STATE_FILE}.tmp" || true
+    mv "${STATE_FILE}.tmp" "${STATE_FILE}"
+    ;;
+  *)
+    exit 0
+    ;;
+esac

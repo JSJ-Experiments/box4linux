@@ -1,12 +1,13 @@
 # box4linux workspace
 
-Linux-native MVP control plane (phase 1 + firewall skeleton) lives in:
+Linux-native control plane (phase 2) lives in:
 - `cmd/boxctl`
 - `lib/common.sh`
 - `lib/config.sh`
 - `lib/supervisor/`
 - `lib/firewall/`
 - `systemd/`
+- `tests/integration/`
 
 Android reference artifacts are kept untouched in `box-reference/`.
 
@@ -14,10 +15,14 @@ Android reference artifacts are kept untouched in `box-reference/`.
 1. Use repo-local fallback config at `etc/box/box.toml` (auto-used when `/etc/box/box.toml` is missing).
 2. Run status commands:
    - `./cmd/boxctl service status`
+   - `./cmd/boxctl service status --json`
    - `./cmd/boxctl firewall status`
+   - `./cmd/boxctl firewall status --json`
 3. Run privileged actions as root:
    - `sudo ./cmd/boxctl service start|stop|restart`
    - `sudo ./cmd/boxctl firewall enable|disable|renew`
+4. Run integration checks:
+   - `./tests/integration/test_phase2.sh`
 
 ## Systemd units
 - `systemd/box.service`
@@ -25,7 +30,24 @@ Android reference artifacts are kept untouched in `box-reference/`.
 
 Copy/symlink these to your systemd unit path and ensure `boxctl` is installed as `/usr/bin/boxctl`.
 
-## MVP notes
+## Phase 2 notes
 - Supported cores: `mihomo`, `sing-box`
-- Firewall backend: `iptables` skeleton with idempotent cleanup
-- TODO(phase-2): full mode parity (`tproxy` target behavior, policy filters, nft backend, JSON status, config mutators)
+- Core overlay mutators render runtime configs under `/run/box/rendered` (or dev fallback).
+- Firewall backend (`iptables`) supports staged apply + rollback for `tun`, `tproxy`, `redirect`, `mixed`, `enhance`.
+- DNS strategy handling: `tproxy`, `redirect`, `disable`.
+- Tailscale coexistence defaults to `dns_coexist_mode=preserve_tailnet`.
+- Coexistence mode semantics:
+  - `preserve_tailnet`: apply tailscale bypass (`tailscale0`, `100.64.0.0/10`) and MagicDNS resolver exclusion (`100.100.100.100:53`).
+  - `strict_box`: do not add tailscale bypass/MagicDNS exclusion rules; still never delete non-BOX routes/rules.
+- Tailscale safeguards include:
+  - bypass `tailscale0`
+  - bypass `100.64.0.0/10` and preserve `fd7a:115c:a1e0::/48` by not touching ip6tables in this backend
+  - bypass `100.100.100.100:53` (MagicDNS resolver)
+  - preserve table `52` / fwmark `0x80000/0xff0000` ownership
+- Route convergence: renew/reapply prunes stale BOX fwmark rules for the same fwmark+table (any old pref) and installs exactly one rule with current `route_pref`.
+- `enable|renew|disable` paths are idempotent and lock-protected.
+
+## Remaining TODO
+- Full UID/GID/interface/MAC policy graph in firewall (currently placeholder stage).
+- `nftables` backend.
+- API-based reload hooks for `mihomo` and `sing-box`.
