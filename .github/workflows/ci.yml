@@ -36,7 +36,10 @@ jobs:
       - name: ShellCheck (if available)
         run: |
           if command -v shellcheck >/dev/null 2>&1; then
+            # SC1091: dynamic source paths are expected in this repo layout.
+            # SC2034: shared globals/constants are intentionally defined in common libs.
             shellcheck \
+              -e SC1091,SC2034 \
               cmd/boxctl \
               lib/*.sh \
               lib/firewall/*.sh \
@@ -45,7 +48,7 @@ jobs:
               tests/integration/test_real_kernel.sh \
               tests/integration/test_arch_package_smoke.sh \
               packaging/scripts/systemd-lifecycle.sh
-            shellcheck -s sh packaging/arch/box4linux.install
+            shellcheck -e SC1091,SC2034 -s sh packaging/arch/box4linux.install
           else
             echo "shellcheck not available; skipping"
           fi

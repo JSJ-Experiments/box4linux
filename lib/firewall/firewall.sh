@@ -192,6 +192,7 @@ firewall_status_text() {
 firewall_status_json() {
   local current_status current_mode
   local fields
+  local error_part=""
   current_status="$(firewall_read_state_value "status" || printf 'disabled')"
   current_mode="$(firewall_read_state_value "mode" || printf '%s' "${BOX_NETWORK_MODE}")"
   firewall_collect_status
@@ -209,7 +210,6 @@ firewall_status_json() {
     "$(json_pair "tailscale_fwmark" "${BOX_TAILSCALE_FWMARK}")"
     "$(json_pair "tailscale_route_table" "${BOX_TAILSCALE_ROUTE_TABLE}")"
     "$(json_pair "backend_capabilities" "${FW_CAP_DETAILS:-unknown}")"
-    "$(json_pair "error" "${FW_LAST_ERROR:-}")"
     "$(json_pair "last_error" "${FW_LAST_ERROR:-}")"
     "$(json_bool_pair "backend_available" "${FW_BACKEND_AVAILABLE}")"
     "$(json_bool_pair "cap_tproxy" "${FW_CAP_TPROXY}")"
@@ -227,8 +227,12 @@ firewall_status_json() {
     "$(json_bool_pair "route_table_installed" "${FW_ROUTE_TABLE_INSTALLED}")"
   )
 
+  if [[ -n "${FW_LAST_ERROR:-}" ]]; then
+    error_part=",$(json_pair "error" "${FW_LAST_ERROR}")"
+  fi
+
   local IFS=,
-  printf '{%s}\n' "${fields[*]}"
+  printf '{%s%s}\n' "${fields[*]}" "${error_part}"
 }
 
 firewall_status() {
