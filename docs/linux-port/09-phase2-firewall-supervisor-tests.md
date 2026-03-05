@@ -1,8 +1,10 @@
-# 09 - Phase 2 Implementation Notes
+# 09 - Linux Firewall/Supervisor Notes
 
 ## Scope Implemented
-- Firewall staged apply/rollback in `lib/firewall/backend_iptables.sh`
-- Modes: `tun`, `tproxy`, `redirect`, `mixed`, `enhance`
+- Firewall staged apply/rollback in:
+  - `lib/firewall/backend_iptables.sh`
+  - `lib/firewall/backend_nft.sh`
+- Modes on both backends: `tun`, `tproxy`, `redirect`, `mixed`, `enhance`
 - DNS hijack strategies: `tproxy`, `redirect`, `disable`
 - Tailscale coexistence safeguards:
   - preserve existing tailscale policy/routing ownership
@@ -15,6 +17,11 @@
 - JSON status output:
   - `boxctl service status --json`
   - `boxctl firewall status --json`
+- Dry-run:
+  - `boxctl firewall dry-run`
+- Command tracing:
+  - `BOX_TRACE_COMMANDS=1 ./cmd/boxctl firewall enable`
+  - `BOX_TRACE_COMMANDS=1 ./cmd/boxctl service start`
 - Integration test harness:
   - `tests/integration/test_phase2.sh`
 
@@ -43,6 +50,14 @@
 - After apply there must be exactly one BOX fwmark rule at the current `route_pref`.
 - Tailscale rules (e.g., `fwmark 0x80000/0xff0000` and table `52`) are never targeted.
 
+## Backend Matrix
+- `iptables`:
+  - mature path in this repo
+  - status includes capability and tailscale coexist flags
+- `nftables`:
+  - MVP parity with iptables modes/DNS/coexist behavior
+  - cleanup only deletes BOX-owned nft tables (`inet box_mangle`, `ip box_nat`)
+
 
 ## Overlay Contract
 - Source config files are never edited in place.
@@ -53,6 +68,6 @@
 
 ## Known Gaps
 - UID/GID/interface/MAC policy filters are placeholders.
-- No nftables backend yet.
-- ip6tables-tailnet explicit bypass chains are pending (current backend avoids ip6tables modifications).
+- nftables IPv6-specific tailnet chain rules are pending.
+- Kernel feature probing remains lightweight (tool-level + basic tproxy probe).
 - API reload is still TODO for both cores.

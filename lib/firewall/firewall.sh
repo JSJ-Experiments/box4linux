@@ -5,6 +5,7 @@
 set -euo pipefail
 
 source "${BOX_LIB_DIR}/firewall/backend_iptables.sh"
+source "${BOX_LIB_DIR}/firewall/backend_nft.sh"
 
 firewall_state_file() {
   init_runtime_paths
@@ -54,6 +55,12 @@ firewall_enable_locked() {
         return "${E_FIREWALL_APPLY}"
       fi
       ;;
+    nftables)
+      if ! backend_nft_apply_mode "${BOX_NETWORK_MODE}"; then
+        log "ERROR" "firewall" "E_FW_APPLY" "firewall apply failed: ${FW_LAST_ERROR:-unknown}"
+        return "${E_FIREWALL_APPLY}"
+      fi
+      ;;
     *)
       log "ERROR" "firewall" "E_FW_BACKEND" "unsupported firewall backend: ${BOX_FIREWALL_BACKEND}"
       return "${E_FIREWALL_APPLY}"
@@ -71,6 +78,7 @@ firewall_disable_locked() {
 
   case "${BOX_FIREWALL_BACKEND}" in
     iptables) backend_iptables_cleanup ;;
+    nftables) backend_nft_cleanup ;;
     *)
       log "WARN" "firewall" "FW_BACKEND_UNKNOWN" "unknown backend on disable: ${BOX_FIREWALL_BACKEND}"
       ;;
@@ -98,12 +106,37 @@ firewall_renew() {
   with_lock "firewall" 30 firewall_renew_locked
 }
 
+firewall_dry_run() {
+  local rc=0
+  load_config
+  export BOX_FIREWALL_DRY_RUN=1
+  case "${BOX_FIREWALL_BACKEND}" in
+    iptables) backend_iptables_apply_mode "${BOX_NETWORK_MODE}" || rc=$? ;;
+    nftables) backend_nft_apply_mode "${BOX_NETWORK_MODE}" || rc=$? ;;
+    *)
+      log "ERROR" "firewall" "E_FW_BACKEND" "unsupported firewall backend: ${BOX_FIREWALL_BACKEND}"
+      rc="${E_FIREWALL_APPLY}"
+      ;;
+  esac
+  unset BOX_FIREWALL_DRY_RUN
+  return "${rc}"
+}
+
 firewall_status_text() {
   local current_status current_mode
   current_status="$(firewall_read_state_value "status" || printf 'disabled')"
   current_mode="$(firewall_read_state_value "mode" || printf '%s' "${BOX_NETWORK_MODE}")"
+  FW_CAP_DETAILS="unknown"
+  FW_LAST_ERROR=""
 
-  backend_iptables_collect_status
+  case "${BOX_FIREWALL_BACKEND}" in
+    iptables) backend_iptables_collect_status ;;
+    nftables) backend_nft_collect_status ;;
+    *)
+      FW_BACKEND_AVAILABLE="false"
+      FW_LAST_ERROR="unsupported backend: ${BOX_FIREWALL_BACKEND}"
+      ;;
+  esac
 
   printf 'status=%s\n' "${current_status}"
   printf 'mode=%s\n' "${current_mode}"
@@ -114,6 +147,7 @@ firewall_status_text() {
   printf 'tailscale_dns_resolver=%s\n' "${BOX_TAILSCALE_DNS_RESOLVER}"
   printf 'tailscale_fwmark=%s\n' "${BOX_TAILSCALE_FWMARK}"
   printf 'tailscale_route_table=%s\n' "${BOX_TAILSCALE_ROUTE_TABLE}"
+  printf 'backend_capabilities=%s\n' "${FW_CAP_DETAILS:-unknown}"
   printf 'tailscale_bypass_applied=%s\n' "${FW_TAILSCALE_BYPASS_APPLIED}"
   printf 'cap_tproxy=%s\n' "${FW_CAP_TPROXY}"
   printf 'tailscale_mark_rule=%s\n' "${FW_TAILSCALE_MARK_RULE}"
@@ -133,10 +167,19 @@ firewall_status_json() {
   local current_status current_mode
   current_status="$(firewall_read_state_value "status" || printf 'disabled')"
   current_mode="$(firewall_read_state_value "mode" || printf '%s' "${BOX_NETWORK_MODE}")"
+  FW_CAP_DETAILS="unknown"
+  FW_LAST_ERROR=""
 
-  backend_iptables_collect_status
+  case "${BOX_FIREWALL_BACKEND}" in
+    iptables) backend_iptables_collect_status ;;
+    nftables) backend_nft_collect_status ;;
+    *)
+      FW_BACKEND_AVAILABLE="false"
+      FW_LAST_ERROR="unsupported backend: ${BOX_FIREWALL_BACKEND}"
+      ;;
+  esac
 
-  printf '{%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s}\n' \
+  printf '{%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s}\n' \
     "$(json_pair "status" "${current_status}")" \
     "$(json_pair "mode" "${current_mode}")" \
     "$(json_pair "backend" "${BOX_FIREWALL_BACKEND}")" \
@@ -147,6 +190,8 @@ firewall_status_json() {
     "$(json_pair "tailscale_dns_resolver" "${BOX_TAILSCALE_DNS_RESOLVER}")" \
     "$(json_pair "tailscale_fwmark" "${BOX_TAILSCALE_FWMARK}")" \
     "$(json_pair "tailscale_route_table" "${BOX_TAILSCALE_ROUTE_TABLE}")" \
+    "$(json_pair "backend_capabilities" "${FW_CAP_DETAILS:-unknown}")" \
+    "$(json_pair "error" "${FW_LAST_ERROR:-}")" \
     "$(json_bool_pair "backend_available" "${FW_BACKEND_AVAILABLE}")" \
     "$(json_bool_pair "cap_tproxy" "${FW_CAP_TPROXY}")" \
     "$(json_bool_pair "tailscale_bypass_applied" "${FW_TAILSCALE_BYPASS_APPLIED}")" \
@@ -175,9 +220,10 @@ firewall_cmd() {
     enable) firewall_enable ;;
     disable) firewall_disable ;;
     renew) firewall_renew ;;
+    dry-run) firewall_dry_run ;;
     status) firewall_status ;;
     *)
-      printf 'usage: boxctl firewall <enable|disable|renew|status> [--json]\n' >&2
+      printf 'usage: boxctl firewall <enable|disable|renew|status|dry-run> [--json]\n' >&2
       return 2
       ;;
   esac

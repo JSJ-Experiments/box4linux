@@ -23,6 +23,7 @@ BOX_LOG_DIR="${BOX_LOG_DIR:-${BOX_LOG_DIR_DEFAULT}}"
 BOX_LOCK_DIR="${BOX_LOCK_DIR:-${BOX_RUN_DIR}/locks}"
 BOX_OUTPUT_FORMAT="${BOX_OUTPUT_FORMAT:-text}"
 BOX_LOG_TO_FILE="${BOX_LOG_TO_FILE:-1}"
+BOX_TRACE_COMMANDS="${BOX_TRACE_COMMANDS:-0}"
 
 E_CONFIG=10
 E_CORE_START=20
@@ -124,6 +125,34 @@ json_bool_pair() {
   else
     printf '"%s":false' "$(json_escape "${key}")"
   fi
+}
+
+trace_cmd() {
+  local component="${1:-trace}"
+  shift || true
+  if [[ "${BOX_TRACE_COMMANDS}" == "1" ]]; then
+    local cmd
+    printf -v cmd '%q ' "$@"
+    log "DEBUG" "${component}" "TRACE_CMD" "${cmd% }"
+  fi
+}
+
+enable_command_trace() {
+  local component="${1:-trace}"
+  if [[ "${BOX_TRACE_COMMANDS}" != "1" ]]; then
+    return 0
+  fi
+  BOX_TRACE_COMPONENT="${component}"
+  export BOX_TRACE_COMPONENT
+  trap 'if [[ "${_BOX_TRACE_GUARD:-0}" == "0" ]]; then _BOX_TRACE_GUARD=1; case "${BASH_COMMAND}" in enable_command_trace*|disable_command_trace*|trace_cmd*|log* ) ;; * ) log "DEBUG" "${BOX_TRACE_COMPONENT}" "TRACE_CMD" "${BASH_COMMAND}" ;; esac; _BOX_TRACE_GUARD=0; fi' DEBUG
+}
+
+disable_command_trace() {
+  if [[ "${BOX_TRACE_COMMANDS}" != "1" ]]; then
+    return 0
+  fi
+  trap - DEBUG
+  unset BOX_TRACE_COMPONENT
 }
 
 lock_path_for() {

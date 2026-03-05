@@ -20,6 +20,7 @@ FW_CAP_TPROXY="false"
 FW_TAILSCALE_MARK_RULE="false"
 FW_TAILSCALE_TABLE_PRESENT="false"
 FW_TAILSCALE_BYPASS_APPLIED="false"
+FW_CAP_DETAILS=""
 FW_LAST_ERROR=""
 
 iptables_cmd() {
@@ -311,6 +312,11 @@ backend_iptables_apply_mode() {
   backend_iptables_init
   FW_LAST_ERROR=""
 
+  if [[ "${BOX_FIREWALL_DRY_RUN:-0}" == "1" ]]; then
+    backend_iptables_dry_run "${mode}"
+    return 0
+  fi
+
   if ! backend_iptables_cleanup; then
     FW_LAST_ERROR="failed to cleanup existing firewall state"
     return "${E_FIREWALL_APPLY}"
@@ -360,6 +366,20 @@ backend_iptables_apply_mode() {
   return 0
 }
 
+backend_iptables_dry_run() {
+  local mode="${1:?missing mode}"
+  printf '# dry-run backend=iptables mode=%s dns=%s coexist=%s\n' "${mode}" "${BOX_DNS_HIJACK_MODE}" "${BOX_DNS_COEXIST_MODE}"
+  printf 'iptables -t mangle -D PREROUTING -j %s\n' "${BOX_CHAIN_MANGLE}"
+  printf 'iptables -t mangle -D OUTPUT -j %s\n' "${BOX_CHAIN_MANGLE}"
+  printf 'iptables -t nat -D PREROUTING -j %s\n' "${BOX_CHAIN_NAT}"
+  printf 'iptables -t nat -D OUTPUT -j %s\n' "${BOX_CHAIN_NAT}"
+  printf 'iptables -t mangle -N %s ; iptables -t nat -N %s\n' "${BOX_CHAIN_MANGLE}" "${BOX_CHAIN_NAT}"
+  printf 'iptables -t mangle -N %s ; iptables -t nat -N %s\n' "${BOX_CHAIN_DNS_MANGLE}" "${BOX_CHAIN_DNS_NAT}"
+  printf 'iptables mode rules for %s and dns strategy %s\n' "${mode}" "${BOX_DNS_HIJACK_MODE}"
+  printf 'ip rule add fwmark %s table %s pref %s\n' "${BOX_FWMARK}" "${BOX_ROUTE_TABLE}" "${BOX_ROUTE_PREF}"
+  printf 'ip route add local default dev lo table %s\n' "${BOX_ROUTE_TABLE}"
+}
+
 backend_iptables_collect_status() {
   local ipt ip_tool
 
@@ -374,6 +394,7 @@ backend_iptables_collect_status() {
   FW_TAILSCALE_MARK_RULE="false"
   FW_TAILSCALE_TABLE_PRESENT="false"
   FW_TAILSCALE_BYPASS_APPLIED="false"
+  FW_CAP_DETAILS="backend=iptables,available=false"
   FW_LAST_ERROR=""
 
   ipt="$(iptables_cmd || true)"
@@ -395,6 +416,7 @@ backend_iptables_collect_status() {
   if "${ip_tool}" rule list 2>/dev/null | grep -Eq "fwmark[[:space:]]+${BOX_FWMARK}[[:space:]]+(lookup|table)[[:space:]]+${BOX_ROUTE_TABLE}"; then FW_ROUTE_RULE="true"; fi
   if "${ip_tool}" route show table "${BOX_ROUTE_TABLE}" 2>/dev/null | grep -Fq "local default dev lo"; then FW_ROUTE_TABLE_INSTALLED="true"; fi
   if backend_iptables_probe_tproxy; then FW_CAP_TPROXY="true"; fi
+  FW_CAP_DETAILS="backend=iptables,available=true,tproxy=${FW_CAP_TPROXY}"
   if "${ip_tool}" rule list 2>/dev/null | grep -Eq "fwmark[[:space:]]+${BOX_TAILSCALE_FWMARK}[[:space:]]+(lookup|table)[[:space:]]+${BOX_TAILSCALE_ROUTE_TABLE}"; then
     FW_TAILSCALE_MARK_RULE="true"
   fi
@@ -406,5 +428,5 @@ backend_iptables_collect_status() {
   fi
 
   export FW_BACKEND_AVAILABLE FW_CHAIN_MANGLE FW_CHAIN_NAT FW_CHAIN_DNS_MANGLE FW_CHAIN_DNS_NAT
-  export FW_ROUTE_RULE FW_ROUTE_TABLE_INSTALLED FW_CAP_TPROXY FW_TAILSCALE_MARK_RULE FW_TAILSCALE_TABLE_PRESENT FW_TAILSCALE_BYPASS_APPLIED FW_LAST_ERROR
+  export FW_ROUTE_RULE FW_ROUTE_TABLE_INSTALLED FW_CAP_TPROXY FW_TAILSCALE_MARK_RULE FW_TAILSCALE_TABLE_PRESENT FW_TAILSCALE_BYPASS_APPLIED FW_CAP_DETAILS FW_LAST_ERROR
 }
