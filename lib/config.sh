@@ -212,6 +212,14 @@ validate_config() {
     log "ERROR" "config" "E_CONFIG_TAILSCALE" "tailscale coexist fields must not be empty"
     return "${E_CONFIG}"
   fi
+
+  case "${BOX_FIREWALL_BACKEND}" in
+    iptables|nftables) ;;
+    *)
+      log "ERROR" "config" "E_CONFIG_FW_BACKEND" "unsupported firewall backend: ${BOX_FIREWALL_BACKEND}"
+      return "${E_CONFIG}"
+      ;;
+  esac
 }
 
 load_config() {

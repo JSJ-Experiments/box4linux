@@ -21,8 +21,10 @@ trap cleanup EXIT
 export PATH="${MOCK_DIR}:${PATH}"
 export MOCK_IPTABLES_STATE="${TMP_DIR}/mock/iptables.state"
 export MOCK_IP_STATE="${TMP_DIR}/mock/ip.state"
+export MOCK_NFT_STATE="${TMP_DIR}/mock/nft.state"
 export BOX_IPTABLES_CMD="${MOCK_DIR}/iptables"
 export BOX_IP_CMD="${MOCK_DIR}/ip"
+export BOX_NFT_CMD="${MOCK_DIR}/nft"
 export BOX_UNSAFE_SKIP_ROOT_CHECK=1
 export BOX_CAP_TPROXY=1
 export BOX_RUN_DIR="${TMP_DIR}/run"
@@ -30,7 +32,7 @@ export BOX_VAR_DIR="${TMP_DIR}/var"
 export BOX_LOG_DIR="${TMP_DIR}/log"
 
 mkdir -p "${TMP_DIR}/mock" "${TMP_DIR}/profiles" "${BOX_RUN_DIR}" "${BOX_VAR_DIR}" "${BOX_LOG_DIR}"
-touch "${MOCK_IPTABLES_STATE}" "${MOCK_IP_STATE}"
+touch "${MOCK_IPTABLES_STATE}" "${MOCK_IP_STATE}" "${MOCK_NFT_STATE}"
 
 MIHOMO_SOURCE="${TMP_DIR}/profiles/mihomo.yaml"
 SING_SOURCE="${TMP_DIR}/profiles/sing-box.json"
@@ -58,6 +60,7 @@ write_config() {
   local source="${4:?missing source config path}"
   local coexist_mode="${5:-preserve_tailnet}"
   local route_pref="${6:-100}"
+  local backend="${7:-iptables}"
   cat >"${CONFIG_FILE}" <<EOF
 [core]
 selected = "${core}"
@@ -80,7 +83,7 @@ tailscale_fwmark = "0x80000/0xff0000"
 tailscale_route_table = 52
 
 [firewall]
-backend = "iptables"
+backend = "${backend}"
 route_table = 2024
 route_pref = ${route_pref}
 fwmark = "16777216/16777216"
@@ -122,11 +125,20 @@ assert_file_exists() {
   fi
 }
 
-assert_no_duplicate_rules() {
+assert_no_duplicate_rules_iptables() {
   local dup_count
   dup_count="$(grep '^RULE|' "${MOCK_IPTABLES_STATE}" | sort | uniq -d | wc -l | tr -d '[:space:]')"
   if [[ "${dup_count}" != "0" ]]; then
     printf 'ASSERT DUPLICATE RULE FAILED: %s duplicate rules in %s\n' "${dup_count}" "${MOCK_IPTABLES_STATE}" >&2
+    exit 1
+  fi
+}
+
+assert_no_duplicate_rules_nft() {
+  local dup_count
+  dup_count="$(grep '^RULE|' "${MOCK_NFT_STATE}" | sort | uniq -d | wc -l | tr -d '[:space:]')"
+  if [[ "${dup_count}" != "0" ]]; then
+    printf 'ASSERT DUPLICATE NFT RULE FAILED: %s duplicate rules in %s\n' "${dup_count}" "${MOCK_NFT_STATE}" >&2
     exit 1
   fi
 }
@@ -141,6 +153,11 @@ assert_no_box_artifacts() {
     grep -Eq 'ROUTE\|2024\|' "${MOCK_IP_STATE}"; then
     printf 'ASSERT CLEANUP FAILED: box ip rule/route artifacts still present\n' >&2
     cat "${MOCK_IP_STATE}" >&2
+    exit 1
+  fi
+  if grep -Eq '(TABLE|CHAIN|RULE)\|(inet|ip)\|(box_mangle|box_nat)' "${MOCK_NFT_STATE}"; then
+    printf 'ASSERT CLEANUP FAILED: nft BOX tables/chains/rules still present\n' >&2
+    cat "${MOCK_NFT_STATE}" >&2
     exit 1
   fi
 }
@@ -196,6 +213,19 @@ assert_tailscale_bypass_rules() {
   fi
 }
 
+assert_nft_tailscale_bypass_rules() {
+  if ! grep -Fq 'RULE|inet|box_mangle|box_main|iifname "tailscale0" return' "${MOCK_NFT_STATE}"; then
+    printf 'ASSERT NFT TAILSCALE FAILED: iface bypass missing\n' >&2
+    cat "${MOCK_NFT_STATE}" >&2
+    exit 1
+  fi
+  if ! grep -Fq 'RULE|inet|box_mangle|box_dns|ip daddr 100.100.100.100 udp dport 53 return' "${MOCK_NFT_STATE}"; then
+    printf 'ASSERT NFT MAGICDNS FAILED: resolver bypass missing\n' >&2
+    cat "${MOCK_NFT_STATE}" >&2
+    exit 1
+  fi
+}
+
 assert_no_tailscale_bypass_rules() {
   if grep -Fq 'RULE|mangle|BOX_MANGLE|-i tailscale0 -j RETURN' "${MOCK_IPTABLES_STATE}" || \
     grep -Fq 'RULE|mangle|BOX_MANGLE|-m mark --mark 0x80000/0xff0000 -j RETURN' "${MOCK_IPTABLES_STATE}" || \
@@ -203,6 +233,15 @@ assert_no_tailscale_bypass_rules() {
     grep -Fq 'RULE|nat|BOX_DNS_NAT|-d 100.100.100.100 -p udp --dport 53 -j RETURN' "${MOCK_IPTABLES_STATE}"; then
     printf 'ASSERT STRICT BOX FAILED: tailscale bypass rule unexpectedly present\n' >&2
     cat "${MOCK_IPTABLES_STATE}" >&2
+    exit 1
+  fi
+}
+
+assert_nft_no_tailscale_bypass_rules() {
+  if grep -Fq 'RULE|inet|box_mangle|box_main|iifname "tailscale0" return' "${MOCK_NFT_STATE}" || \
+    grep -Fq 'RULE|inet|box_mangle|box_dns|ip daddr 100.100.100.100 udp dport 53 return' "${MOCK_NFT_STATE}"; then
+    printf 'ASSERT NFT STRICT BOX FAILED: tailscale bypass rule unexpectedly present\n' >&2
+    cat "${MOCK_NFT_STATE}" >&2
     exit 1
   fi
 }
@@ -225,8 +264,9 @@ run_firewall_mode_case() {
   local dns_mode="${2:?missing dns mode}"
   local coexist_mode="${3:-preserve_tailnet}"
   local route_pref="${4:-100}"
+  local backend="${5:-iptables}"
   local expect_box_route="false"
-  write_config "mihomo" "${mode}" "${dns_mode}" "${MIHOMO_SOURCE}" "${coexist_mode}" "${route_pref}"
+  write_config "mihomo" "${mode}" "${dns_mode}" "${MIHOMO_SOURCE}" "${coexist_mode}" "${route_pref}" "${backend}"
   seed_tailscale_state
 
   case "${mode}" in
@@ -239,18 +279,28 @@ run_firewall_mode_case() {
   must_run firewall enable >/dev/null
   must_run firewall renew >/dev/null
   must_run firewall renew >/dev/null
-  assert_no_duplicate_rules
-  if [[ "${coexist_mode}" == "preserve_tailnet" ]]; then
+  if [[ "${backend}" == "iptables" ]]; then
+    assert_no_duplicate_rules_iptables
+  else
+    assert_no_duplicate_rules_nft
+  fi
+  if [[ "${coexist_mode}" == "preserve_tailnet" && "${backend}" == "iptables" ]]; then
     assert_tailscale_bypass_rules
     assert_magicdns_bypass_rules
-  else
+  elif [[ "${coexist_mode}" == "preserve_tailnet" && "${backend}" == "nftables" ]]; then
+    assert_nft_tailscale_bypass_rules
+  elif [[ "${backend}" == "iptables" ]]; then
     assert_no_tailscale_bypass_rules
+  else
+    assert_nft_no_tailscale_bypass_rules
   fi
   assert_tailscale_state_preserved
 
   status_json="$(must_run firewall status --json)"
   assert_contains "${status_json}" "\"status\":\"enabled\""
   assert_contains "${status_json}" "\"mode\":\"${mode}\""
+  assert_contains "${status_json}" "\"backend\":\"${backend}\""
+  assert_contains "${status_json}" "\"backend_capabilities\":"
   assert_contains "${status_json}" "\"dns_hijack_mode\":\"${dns_mode}\""
   assert_contains "${status_json}" "\"dns_coexist_mode\":\"${coexist_mode}\""
   assert_contains "${status_json}" "\"dns_coexist_mode_active\":\"${coexist_mode}\""
@@ -271,30 +321,44 @@ run_firewall_mode_case() {
   assert_no_box_artifacts
 }
 
-printf '[1/6] firewall mode/dns apply+renew+disable idempotency (preserve_tailnet)\n'
-run_firewall_mode_case "tun" "disable" "preserve_tailnet" "100"
-run_firewall_mode_case "tproxy" "tproxy" "preserve_tailnet" "100"
-run_firewall_mode_case "redirect" "redirect" "preserve_tailnet" "100"
-run_firewall_mode_case "mixed" "tproxy" "preserve_tailnet" "100"
-run_firewall_mode_case "enhance" "redirect" "preserve_tailnet" "100"
+printf '[1/8] firewall mode/dns apply+renew+disable idempotency (preserve_tailnet)\n'
+run_firewall_mode_case "tun" "disable" "preserve_tailnet" "100" "iptables"
+run_firewall_mode_case "tproxy" "tproxy" "preserve_tailnet" "100" "iptables"
+run_firewall_mode_case "redirect" "redirect" "preserve_tailnet" "100" "iptables"
+run_firewall_mode_case "mixed" "tproxy" "preserve_tailnet" "100" "iptables"
+run_firewall_mode_case "enhance" "redirect" "preserve_tailnet" "100" "iptables"
 
-printf '[2/6] coexist mode strict_box rule differences\n'
-run_firewall_mode_case "tproxy" "tproxy" "strict_box" "100"
+printf '[2/8] nftables backend mode/dns apply+renew+disable idempotency (preserve_tailnet)\n'
+run_firewall_mode_case "tun" "disable" "preserve_tailnet" "100" "nftables"
+run_firewall_mode_case "tproxy" "tproxy" "preserve_tailnet" "100" "nftables"
+run_firewall_mode_case "redirect" "redirect" "preserve_tailnet" "100" "nftables"
+run_firewall_mode_case "mixed" "tproxy" "preserve_tailnet" "100" "nftables"
+run_firewall_mode_case "enhance" "redirect" "preserve_tailnet" "100" "nftables"
 
-printf '[3/6] route_pref convergence across renew\n'
-write_config "mihomo" "tproxy" "tproxy" "${MIHOMO_SOURCE}" "preserve_tailnet" "100"
+printf '[3/8] coexist mode strict_box rule differences\n'
+run_firewall_mode_case "tproxy" "tproxy" "strict_box" "100" "iptables"
+run_firewall_mode_case "tproxy" "tproxy" "strict_box" "100" "nftables"
+
+printf '[4/8] route_pref convergence across renew\n'
+write_config "mihomo" "tproxy" "tproxy" "${MIHOMO_SOURCE}" "preserve_tailnet" "100" "iptables"
 seed_tailscale_state
 must_run firewall enable >/dev/null
 assert_box_route_pref "100"
-write_config "mihomo" "tproxy" "tproxy" "${MIHOMO_SOURCE}" "preserve_tailnet" "333"
+write_config "mihomo" "tproxy" "tproxy" "${MIHOMO_SOURCE}" "preserve_tailnet" "333" "iptables"
 must_run firewall renew >/dev/null
 assert_box_route_pref "333"
 must_run firewall disable >/dev/null
 assert_tailscale_state_preserved
 assert_no_box_artifacts
 
-printf '[4/6] service status side-effect free\n'
-write_config "mihomo" "tun" "disable" "${MIHOMO_SOURCE}" "preserve_tailnet" "100"
+printf '[5/8] firewall dry-run surfaces intended operations\n'
+write_config "mihomo" "tproxy" "tproxy" "${MIHOMO_SOURCE}" "preserve_tailnet" "100" "nftables"
+dryrun_output="$(must_run firewall dry-run)"
+assert_contains "${dryrun_output}" "dry-run"
+assert_contains "${dryrun_output}" "backend=nftables"
+
+printf '[6/8] service status side-effect free\n'
+write_config "mihomo" "tun" "disable" "${MIHOMO_SOURCE}" "preserve_tailnet" "100" "iptables"
 rm -rf "${BOX_RUN_DIR}/rendered"
 must_run service status --json >/dev/null
 if [[ -d "${BOX_RUN_DIR}/rendered" ]]; then
@@ -302,8 +366,8 @@ if [[ -d "${BOX_RUN_DIR}/rendered" ]]; then
   exit 1
 fi
 
-printf '[5/6] service lifecycle + mihomo overlay\n'
-write_config "mihomo" "mixed" "redirect" "${MIHOMO_SOURCE}" "preserve_tailnet" "100"
+printf '[7/8] service lifecycle + mihomo overlay\n'
+write_config "mihomo" "mixed" "redirect" "${MIHOMO_SOURCE}" "preserve_tailnet" "100" "iptables"
 seed_tailscale_state
 mihomo_checksum_before="$(sha256sum "${MIHOMO_SOURCE}" | awk '{print $1}')"
 must_run service start >/dev/null
@@ -326,8 +390,8 @@ assert_tailscale_state_preserved
 service_json="$(must_run service status --json)"
 assert_contains "${service_json}" "\"status\":\"stopped\""
 
-printf '[6/6] service lifecycle + sing-box overlay\n'
-write_config "sing-box" "tproxy" "tproxy" "${SING_SOURCE}" "preserve_tailnet" "100"
+printf '[8/8] service lifecycle + sing-box overlay\n'
+write_config "sing-box" "tproxy" "tproxy" "${SING_SOURCE}" "preserve_tailnet" "100" "iptables"
 seed_tailscale_state
 sing_checksum_before="$(sha256sum "${SING_SOURCE}" | awk '{print $1}')"
 must_run service start >/dev/null

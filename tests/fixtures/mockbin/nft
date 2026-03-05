@@ -1,0 +1,105 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+STATE_FILE="${MOCK_NFT_STATE:?MOCK_NFT_STATE is required}"
+mkdir -p "$(dirname "${STATE_FILE}")"
+touch "${STATE_FILE}"
+
+dedupe() {
+  sort -u "${STATE_FILE}" >"${STATE_FILE}.tmp"
+  mv "${STATE_FILE}.tmp" "${STATE_FILE}"
+}
+
+remove_table() {
+  local family="${1:?missing family}"
+  local table="${2:?missing table}"
+  grep -Ev "^(TABLE|CHAIN|RULE)\|${family}\|${table}(\||$)" "${STATE_FILE}" >"${STATE_FILE}.tmp" || true
+  mv "${STATE_FILE}.tmp" "${STATE_FILE}"
+}
+
+handle_ruleset_line() {
+  local line="$1"
+  local family table chain rest
+  line="${line#"${line%%[![:space:]]*}"}"
+  [[ -n "${line}" ]] || return 0
+  [[ "${line}" == \#* ]] && return 0
+
+  case "${line}" in
+    add\ table\ *)
+      read -r _ _ family table <<<"${line}"
+      printf 'TABLE|%s|%s\n' "${family}" "${table}" >>"${STATE_FILE}"
+      ;;
+    add\ chain\ *)
+      family="$(awk '{print $3}' <<<"${line}")"
+      table="$(awk '{print $4}' <<<"${line}")"
+      chain="$(awk '{print $5}' <<<"${line}")"
+      printf 'CHAIN|%s|%s|%s\n' "${family}" "${table}" "${chain}" >>"${STATE_FILE}"
+      ;;
+    add\ rule\ *)
+      family="$(awk '{print $3}' <<<"${line}")"
+      table="$(awk '{print $4}' <<<"${line}")"
+      chain="$(awk '{print $5}' <<<"${line}")"
+      rest="${line#add rule ${family} ${table} ${chain} }"
+      printf 'RULE|%s|%s|%s|%s\n' "${family}" "${table}" "${chain}" "${rest}" >>"${STATE_FILE}"
+      ;;
+    delete\ table\ *)
+      read -r _ _ family table <<<"${line}"
+      remove_table "${family}" "${table}"
+      ;;
+  esac
+}
+
+cmd="${1:-}"
+case "${cmd}" in
+  describe)
+    if [[ "${2:-}" == "tproxy" ]]; then
+      exit 0
+    fi
+    ;;
+  list)
+    case "${2:-}" in
+      table)
+        family="${3:-}"
+        table="${4:-}"
+        if grep -Fq "TABLE|${family}|${table}" "${STATE_FILE}"; then
+          printf 'table %s %s {}\n' "${family}" "${table}"
+          exit 0
+        fi
+        exit 1
+        ;;
+      chain)
+        family="${3:-}"
+        table="${4:-}"
+        chain="${5:-}"
+        if ! grep -Fq "CHAIN|${family}|${table}|${chain}" "${STATE_FILE}"; then
+          exit 1
+        fi
+        grep -F "RULE|${family}|${table}|${chain}|" "${STATE_FILE}" | sed "s|^RULE|rule|;s|${family}|${family}|"
+        exit 0
+        ;;
+    esac
+    ;;
+  delete)
+    if [[ "${2:-}" == "table" ]]; then
+      remove_table "${3:-}" "${4:-}"
+      exit 0
+    fi
+    ;;
+  -f)
+    input="${2:-}"
+    if [[ "${input}" == "-" ]]; then
+      while IFS= read -r line; do
+        handle_ruleset_line "${line}"
+      done
+    else
+      while IFS= read -r line; do
+        handle_ruleset_line "${line}"
+      done <"${input}"
+    fi
+    dedupe
+    exit 0
+    ;;
+esac
+
+exit 0

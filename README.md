@@ -21,6 +21,7 @@ Android reference artifacts are kept untouched in `box-reference/`.
 3. Run privileged actions as root:
    - `sudo ./cmd/boxctl service start|stop|restart`
    - `sudo ./cmd/boxctl firewall enable|disable|renew`
+   - `./cmd/boxctl firewall dry-run`
 4. Run integration checks:
    - `./tests/integration/test_phase2.sh`
 
@@ -30,10 +31,13 @@ Android reference artifacts are kept untouched in `box-reference/`.
 
 Copy/symlink these to your systemd unit path and ensure `boxctl` is installed as `/usr/bin/boxctl`.
 
-## Phase 2 notes
+## Phase 3 notes
 - Supported cores: `mihomo`, `sing-box`
 - Core overlay mutators render runtime configs under `/run/box/rendered` (or dev fallback).
-- Firewall backend (`iptables`) supports staged apply + rollback for `tun`, `tproxy`, `redirect`, `mixed`, `enhance`.
+- Firewall backends:
+  - `iptables`: parity path with staged apply/rollback
+  - `nftables`: MVP parity path with staged apply/rollback
+- Supported modes on both backends: `tun`, `tproxy`, `redirect`, `mixed`, `enhance`.
 - DNS strategy handling: `tproxy`, `redirect`, `disable`.
 - Tailscale coexistence defaults to `dns_coexist_mode=preserve_tailnet`.
 - Coexistence mode semantics:
@@ -46,8 +50,11 @@ Copy/symlink these to your systemd unit path and ensure `boxctl` is installed as
   - preserve table `52` / fwmark `0x80000/0xff0000` ownership
 - Route convergence: renew/reapply prunes stale BOX fwmark rules for the same fwmark+table (any old pref) and installs exactly one rule with current `route_pref`.
 - `enable|renew|disable` paths are idempotent and lock-protected.
+- `boxctl firewall dry-run` prints intended backend operations without applying.
+- `BOX_TRACE_COMMANDS=1` enables command tracing logs for firewall/supervisor paths.
 
 ## Remaining TODO
 - Full UID/GID/interface/MAC policy graph in firewall (currently placeholder stage).
-- `nftables` backend.
+- Full kernel-capability probing for nft/iptables modules across all distro variants.
 - API-based reload hooks for `mihomo` and `sing-box`.
+- Explicit IPv6 tailnet bypass chains for nftables backend.
