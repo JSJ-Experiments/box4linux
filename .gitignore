@@ -12,3 +12,8 @@ box-reference/
 
 # Local Linux dev runtime state
 .box-dev/
+
+# Arch packaging build artifacts
+packaging/arch/*.pkg.tar.*
+packaging/arch/pkg/
+packaging/arch/src/

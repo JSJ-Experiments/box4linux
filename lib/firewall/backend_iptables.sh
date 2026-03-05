@@ -43,6 +43,64 @@ ip_cmd() {
   command -v ip >/dev/null 2>&1 && printf '%s\n' "ip"
 }
 
+fwmark_normalize() {
+  local raw="${1:?missing fwmark}"
+  local value mask
+
+  if [[ "${raw}" == */* ]]; then
+    value="${raw%%/*}"
+    mask="${raw##*/}"
+  else
+    value="${raw}"
+    mask="0xffffffff"
+  fi
+
+  if ! [[ "${value}" =~ ^(0[xX][0-9a-fA-F]+|[0-9]+)$ ]]; then
+    return 1
+  fi
+  if ! [[ "${mask}" =~ ^(0[xX][0-9a-fA-F]+|[0-9]+)$ ]]; then
+    return 1
+  fi
+
+  printf '%u/%u\n' "$((value))" "$((mask))"
+}
+
+fwmark_equal() {
+  local left="${1:?missing left fwmark}"
+  local right="${2:?missing right fwmark}"
+  local left_norm right_norm
+
+  left_norm="$(fwmark_normalize "${left}" 2>/dev/null || true)"
+  right_norm="$(fwmark_normalize "${right}" 2>/dev/null || true)"
+  [[ -n "${left_norm}" && -n "${right_norm}" && "${left_norm}" == "${right_norm}" ]]
+}
+
+backend_iptables_rule_line_fwmark() {
+  local line="${1:-}"
+  local i
+  read -r -a parts <<<"${line}"
+  for ((i = 0; i < ${#parts[@]}; i++)); do
+    if [[ "${parts[$i]}" == "fwmark" && $((i + 1)) -lt ${#parts[@]} ]]; then
+      printf '%s\n' "${parts[$((i + 1))]}"
+      return 0
+    fi
+  done
+  return 1
+}
+
+backend_iptables_rule_line_table() {
+  local line="${1:-}"
+  local i
+  read -r -a parts <<<"${line}"
+  for ((i = 0; i < ${#parts[@]}; i++)); do
+    if [[ ( "${parts[$i]}" == "lookup" || "${parts[$i]}" == "table" ) && $((i + 1)) -lt ${#parts[@]} ]]; then
+      printf '%s\n' "${parts[$((i + 1))]}"
+      return 0
+    fi
+  done
+  return 1
+}
+
 iptables_table_has_chain() {
   local table="${1:?missing table}"
   local chain="${2:?missing chain}"
@@ -94,6 +152,28 @@ iptables_delete_all() {
   done
 }
 
+iptables_flush_chain_if_exists() {
+  local table="${1:?missing table}"
+  local chain="${2:?missing chain}"
+  local ipt
+  ipt="$(iptables_cmd || true)"
+  [[ -n "${ipt}" ]] || return 0
+  if iptables_table_has_chain "${table}" "${chain}"; then
+    "${ipt}" -t "${table}" -F "${chain}" >/dev/null 2>&1 || true
+  fi
+}
+
+iptables_delete_chain_if_exists() {
+  local table="${1:?missing table}"
+  local chain="${2:?missing chain}"
+  local ipt
+  ipt="$(iptables_cmd || true)"
+  [[ -n "${ipt}" ]] || return 0
+  if iptables_table_has_chain "${table}" "${chain}"; then
+    "${ipt}" -t "${table}" -X "${chain}" >/dev/null 2>&1 || true
+  fi
+}
+
 backend_iptables_probe_tproxy() {
   if [[ -n "${BOX_CAP_TPROXY:-}" ]]; then
     [[ "${BOX_CAP_TPROXY}" == "1" || "${BOX_CAP_TPROXY}" == "true" ]] && return 0
@@ -126,14 +206,24 @@ backend_iptables_cleanup() {
     iptables_delete_all nat PREROUTING -j "${BOX_CHAIN_NAT}"
     iptables_delete_all nat OUTPUT -j "${BOX_CHAIN_NAT}"
 
-    "${ipt}" -t mangle -F "${BOX_CHAIN_DNS_MANGLE}" >/dev/null 2>&1 || true
-    "${ipt}" -t mangle -X "${BOX_CHAIN_DNS_MANGLE}" >/dev/null 2>&1 || true
-    "${ipt}" -t nat -F "${BOX_CHAIN_DNS_NAT}" >/dev/null 2>&1 || true
-    "${ipt}" -t nat -X "${BOX_CHAIN_DNS_NAT}" >/dev/null 2>&1 || true
-    "${ipt}" -t mangle -F "${BOX_CHAIN_MANGLE}" >/dev/null 2>&1 || true
-    "${ipt}" -t mangle -X "${BOX_CHAIN_MANGLE}" >/dev/null 2>&1 || true
-    "${ipt}" -t nat -F "${BOX_CHAIN_NAT}" >/dev/null 2>&1 || true
-    "${ipt}" -t nat -X "${BOX_CHAIN_NAT}" >/dev/null 2>&1 || true
+    # Drop internal jumps first, then delete child chains.
+    iptables_flush_chain_if_exists mangle "${BOX_CHAIN_MANGLE}"
+    iptables_flush_chain_if_exists nat "${BOX_CHAIN_NAT}"
+    iptables_flush_chain_if_exists mangle "${BOX_CHAIN_DNS_MANGLE}"
+    iptables_flush_chain_if_exists nat "${BOX_CHAIN_DNS_NAT}"
+
+    iptables_delete_chain_if_exists mangle "${BOX_CHAIN_DNS_MANGLE}"
+    iptables_delete_chain_if_exists nat "${BOX_CHAIN_DNS_NAT}"
+    iptables_delete_chain_if_exists mangle "${BOX_CHAIN_MANGLE}"
+    iptables_delete_chain_if_exists nat "${BOX_CHAIN_NAT}"
+
+    # Idempotent second pass for backends that need another round after detach.
+    iptables_flush_chain_if_exists mangle "${BOX_CHAIN_DNS_MANGLE}"
+    iptables_flush_chain_if_exists nat "${BOX_CHAIN_DNS_NAT}"
+    iptables_delete_chain_if_exists mangle "${BOX_CHAIN_DNS_MANGLE}"
+    iptables_delete_chain_if_exists nat "${BOX_CHAIN_DNS_NAT}"
+    iptables_delete_chain_if_exists mangle "${BOX_CHAIN_MANGLE}"
+    iptables_delete_chain_if_exists nat "${BOX_CHAIN_NAT}"
   fi
 
   if [[ -n "${ip_tool}" ]]; then
@@ -207,19 +297,11 @@ backend_iptables_rule_line_matches_mark_table() {
   local line="${1:-}"
   local mark="${2:?missing mark}"
   local table="${3:?missing table}"
-  awk -v mark="${mark}" -v table="${table}" '
-    {
-      for (i = 1; i <= NF; i++) {
-        if ($i == "fwmark" && (i + 1) <= NF && $(i + 1) == mark) {
-          mark_ok = 1
-        }
-        if (($i == "lookup" || $i == "table") && (i + 1) <= NF && $(i + 1) == table) {
-          table_ok = 1
-        }
-      }
-    }
-    END { exit ! (mark_ok && table_ok) }
-  ' <<<"${line}"
+  local line_mark line_table
+  line_mark="$(backend_iptables_rule_line_fwmark "${line}" 2>/dev/null || true)"
+  line_table="$(backend_iptables_rule_line_table "${line}" 2>/dev/null || true)"
+  [[ -n "${line_mark}" && "${line_table}" == "${table}" ]] || return 1
+  fwmark_equal "${line_mark}" "${mark}"
 }
 
 backend_iptables_rule_line_pref() {

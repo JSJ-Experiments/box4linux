@@ -5,7 +5,32 @@
 set -euo pipefail
 
 CMD_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-LIB_DIR="$(cd "${CMD_DIR}/../lib" && pwd)"
+LIB_DIR_CANDIDATES=(
+  "${BOX_LIB_DIR:-}"
+  "${CMD_DIR}/../lib"
+  "/usr/lib/box4linux/lib"
+)
+LIB_DIR=""
+
+find_lib_dir() {
+  local candidate
+  for candidate in "${LIB_DIR_CANDIDATES[@]}"; do
+    [[ -n "${candidate}" ]] || continue
+    if [[ -f "${candidate}/common.sh" ]]; then
+      LIB_DIR="${candidate}"
+      export BOX_LIB_DIR="${LIB_DIR}"
+      return 0
+    fi
+  done
+  return 1
+}
+
+if ! find_lib_dir; then
+  printf 'failed to locate box4linux lib directory; checked:\n' >&2
+  local_candidate_list="$(printf '  %s\n' "${LIB_DIR_CANDIDATES[@]}")"
+  printf '%s' "${local_candidate_list}" >&2
+  exit 1
+fi
 
 source "${LIB_DIR}/common.sh"
 source "${LIB_DIR}/config.sh"

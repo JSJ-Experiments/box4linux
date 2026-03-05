@@ -94,6 +94,16 @@
 - Skip semantics:
   - exits with `SKIP: ...` when root/CAP_SYS_ADMIN/CAP_NET_ADMIN or backend tools are unavailable.
 
+## Package Smoke Validation
+
+- Arch package smoke script:
+  - `tests/integration/test_arch_package_smoke.sh <path-to-pkg.tar.zst>`
+- Validates packaged install layout and status/dry-run commands without mutating host state:
+  - `boxctl service status --json`
+  - `boxctl firewall status --json`
+  - `boxctl firewall dry-run`
+- Verifies unit files exist in package root and runs `systemd-analyze verify` when available.
+
 
 ## Overlay Contract
 
