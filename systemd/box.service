@@ -1,0 +1,16 @@
+[Unit]
+Description=Box Linux Core Supervisor
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/bin/boxctl service start
+ExecStop=/usr/bin/boxctl service stop
+ExecReload=/usr/bin/boxctl service restart
+TimeoutStartSec=120
+TimeoutStopSec=60
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,17 @@
+[core]
+selected = "mihomo"
+bin_dir = "/usr/local/bin"
+workdir = "/var/lib/box"
+config_source = "/etc/box/profiles/config.yaml"
+
+[network]
+mode = "tun"
+tproxy_port = 9898
+redir_port = 9797
+dns_hijack_mode = "tproxy"
+
+[firewall]
+backend = "iptables"
+route_table = 2024
+route_pref = 100
+fwmark = "16777216/16777216"
