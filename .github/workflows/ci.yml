@@ -75,9 +75,11 @@ jobs:
             archlinux:base-devel \
             bash -lc '
               set -euo pipefail
-              pacman -Syu --noconfirm --needed base-devel bash coreutils tar zstd
-              chmod -R a+rwX /work
-              su nobody -s /bin/bash -c "cd /work/packaging/arch && makepkg --nodeps --noconfirm -f"
+              # Avoid relying on distro default unprivileged accounts (for example `nobody`)
+              # because some base images can mark them as expired.
+              useradd -m -U builder
+              chown -R builder:builder /work
+              su builder -s /bin/bash -c "cd /work/packaging/arch && makepkg --nodeps --noconfirm -f"
             '
 
       - name: Capture package path
