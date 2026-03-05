@@ -122,13 +122,28 @@ firewall_dry_run() {
   return "${rc}"
 }
 
-firewall_status_text() {
-  local current_status current_mode
-  current_status="$(firewall_read_state_value "status" || printf 'disabled')"
-  current_mode="$(firewall_read_state_value "mode" || printf '%s' "${BOX_NETWORK_MODE}")"
-  FW_CAP_DETAILS="unknown"
+firewall_status_diag_defaults() {
+  FW_BACKEND_AVAILABLE="false"
+  FW_CHAIN_MANGLE="false"
+  FW_CHAIN_NAT="false"
+  FW_CHAIN_DNS_MANGLE="false"
+  FW_CHAIN_DNS_NAT="false"
+  FW_ROUTE_RULE="false"
+  FW_ROUTE_TABLE_INSTALLED="false"
+  FW_CAP_TPROXY="false"
+  FW_TAILSCALE_MARK_RULE="false"
+  FW_TAILSCALE_TABLE_PRESENT="false"
+  FW_TAILSCALE_BYPASS_APPLIED="false"
+  FW_CAP_IPV4="false"
+  FW_CAP_IPV6="false"
+  FW_DRY_RUN_SUPPORTED="true"
+  FW_DNS_COEXIST_MODE_ACTIVE="${BOX_DNS_COEXIST_MODE}"
+  FW_CAP_DETAILS="backend=${BOX_FIREWALL_BACKEND},available=false"
   FW_LAST_ERROR=""
+}
 
+firewall_collect_status() {
+  firewall_status_diag_defaults
   case "${BOX_FIREWALL_BACKEND}" in
     iptables) backend_iptables_collect_status ;;
     nftables) backend_nft_collect_status ;;
@@ -137,17 +152,30 @@ firewall_status_text() {
       FW_LAST_ERROR="unsupported backend: ${BOX_FIREWALL_BACKEND}"
       ;;
   esac
+}
+
+firewall_status_text() {
+  local current_status current_mode
+  current_status="$(firewall_read_state_value "status" || printf 'disabled')"
+  current_mode="$(firewall_read_state_value "mode" || printf '%s' "${BOX_NETWORK_MODE}")"
+  firewall_collect_status
 
   printf 'status=%s\n' "${current_status}"
   printf 'mode=%s\n' "${current_mode}"
   printf 'backend=%s\n' "${BOX_FIREWALL_BACKEND}"
+  printf 'backend_selected=%s\n' "${BOX_FIREWALL_BACKEND}"
+  printf 'backend_available=%s\n' "${FW_BACKEND_AVAILABLE}"
   printf 'dns_hijack_mode=%s\n' "${BOX_DNS_HIJACK_MODE}"
   printf 'dns_coexist_mode=%s\n' "${BOX_DNS_COEXIST_MODE}"
+  printf 'dns_coexist_mode_active=%s\n' "${FW_DNS_COEXIST_MODE_ACTIVE}"
   printf 'tailscale_iface=%s\n' "${BOX_TAILSCALE_IFACE}"
   printf 'tailscale_dns_resolver=%s\n' "${BOX_TAILSCALE_DNS_RESOLVER}"
   printf 'tailscale_fwmark=%s\n' "${BOX_TAILSCALE_FWMARK}"
   printf 'tailscale_route_table=%s\n' "${BOX_TAILSCALE_ROUTE_TABLE}"
   printf 'backend_capabilities=%s\n' "${FW_CAP_DETAILS:-unknown}"
+  printf 'cap_ipv4=%s\n' "${FW_CAP_IPV4}"
+  printf 'cap_ipv6=%s\n' "${FW_CAP_IPV6}"
+  printf 'dry_run_supported=%s\n' "${FW_DRY_RUN_SUPPORTED}"
   printf 'tailscale_bypass_applied=%s\n' "${FW_TAILSCALE_BYPASS_APPLIED}"
   printf 'cap_tproxy=%s\n' "${FW_CAP_TPROXY}"
   printf 'tailscale_mark_rule=%s\n' "${FW_TAILSCALE_MARK_RULE}"
@@ -158,55 +186,53 @@ firewall_status_text() {
   printf 'chain_dns_nat=%s\n' "${FW_CHAIN_DNS_NAT}"
   printf 'route_rule=%s\n' "${FW_ROUTE_RULE}"
   printf 'route_table_installed=%s\n' "${FW_ROUTE_TABLE_INSTALLED}"
-  if [[ -n "${FW_LAST_ERROR}" ]]; then
-    printf 'error=%s\n' "${FW_LAST_ERROR}"
-  fi
+  printf 'last_error=%s\n' "${FW_LAST_ERROR:-}"
 }
 
 firewall_status_json() {
   local current_status current_mode
+  local fields
   current_status="$(firewall_read_state_value "status" || printf 'disabled')"
   current_mode="$(firewall_read_state_value "mode" || printf '%s' "${BOX_NETWORK_MODE}")"
-  FW_CAP_DETAILS="unknown"
-  FW_LAST_ERROR=""
+  firewall_collect_status
 
-  case "${BOX_FIREWALL_BACKEND}" in
-    iptables) backend_iptables_collect_status ;;
-    nftables) backend_nft_collect_status ;;
-    *)
-      FW_BACKEND_AVAILABLE="false"
-      FW_LAST_ERROR="unsupported backend: ${BOX_FIREWALL_BACKEND}"
-      ;;
-  esac
-
-  printf '{%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s}\n' \
-    "$(json_pair "status" "${current_status}")" \
-    "$(json_pair "mode" "${current_mode}")" \
-    "$(json_pair "backend" "${BOX_FIREWALL_BACKEND}")" \
-    "$(json_pair "dns_hijack_mode" "${BOX_DNS_HIJACK_MODE}")" \
-    "$(json_pair "dns_coexist_mode" "${BOX_DNS_COEXIST_MODE}")" \
-    "$(json_pair "dns_coexist_mode_active" "${BOX_DNS_COEXIST_MODE}")" \
-    "$(json_pair "tailscale_iface" "${BOX_TAILSCALE_IFACE}")" \
-    "$(json_pair "tailscale_dns_resolver" "${BOX_TAILSCALE_DNS_RESOLVER}")" \
-    "$(json_pair "tailscale_fwmark" "${BOX_TAILSCALE_FWMARK}")" \
-    "$(json_pair "tailscale_route_table" "${BOX_TAILSCALE_ROUTE_TABLE}")" \
-    "$(json_pair "backend_capabilities" "${FW_CAP_DETAILS:-unknown}")" \
-    "$(json_pair "error" "${FW_LAST_ERROR:-}")" \
-    "$(json_bool_pair "backend_available" "${FW_BACKEND_AVAILABLE}")" \
-    "$(json_bool_pair "cap_tproxy" "${FW_CAP_TPROXY}")" \
-    "$(json_bool_pair "tailscale_bypass_applied" "${FW_TAILSCALE_BYPASS_APPLIED}")" \
-    "$(json_bool_pair "tailscale_mark_rule" "${FW_TAILSCALE_MARK_RULE}")" \
-    "$(json_bool_pair "tailscale_table_present" "${FW_TAILSCALE_TABLE_PRESENT}")" \
-    "$(json_bool_pair "chain_mangle" "${FW_CHAIN_MANGLE}")" \
-    "$(json_bool_pair "chain_nat" "${FW_CHAIN_NAT}")" \
-    "$(json_bool_pair "chain_dns_mangle" "${FW_CHAIN_DNS_MANGLE}")" \
-    "$(json_bool_pair "chain_dns_nat" "${FW_CHAIN_DNS_NAT}")" \
-    "$(json_bool_pair "route_rule" "${FW_ROUTE_RULE}")" \
+  fields=(
+    "$(json_pair "status" "${current_status}")"
+    "$(json_pair "mode" "${current_mode}")"
+    "$(json_pair "backend" "${BOX_FIREWALL_BACKEND}")"
+    "$(json_pair "backend_selected" "${BOX_FIREWALL_BACKEND}")"
+    "$(json_pair "dns_hijack_mode" "${BOX_DNS_HIJACK_MODE}")"
+    "$(json_pair "dns_coexist_mode" "${BOX_DNS_COEXIST_MODE}")"
+    "$(json_pair "dns_coexist_mode_active" "${FW_DNS_COEXIST_MODE_ACTIVE}")"
+    "$(json_pair "tailscale_iface" "${BOX_TAILSCALE_IFACE}")"
+    "$(json_pair "tailscale_dns_resolver" "${BOX_TAILSCALE_DNS_RESOLVER}")"
+    "$(json_pair "tailscale_fwmark" "${BOX_TAILSCALE_FWMARK}")"
+    "$(json_pair "tailscale_route_table" "${BOX_TAILSCALE_ROUTE_TABLE}")"
+    "$(json_pair "backend_capabilities" "${FW_CAP_DETAILS:-unknown}")"
+    "$(json_pair "error" "${FW_LAST_ERROR:-}")"
+    "$(json_pair "last_error" "${FW_LAST_ERROR:-}")"
+    "$(json_bool_pair "backend_available" "${FW_BACKEND_AVAILABLE}")"
+    "$(json_bool_pair "cap_tproxy" "${FW_CAP_TPROXY}")"
+    "$(json_bool_pair "cap_ipv4" "${FW_CAP_IPV4}")"
+    "$(json_bool_pair "cap_ipv6" "${FW_CAP_IPV6}")"
+    "$(json_bool_pair "dry_run_supported" "${FW_DRY_RUN_SUPPORTED}")"
+    "$(json_bool_pair "tailscale_bypass_applied" "${FW_TAILSCALE_BYPASS_APPLIED}")"
+    "$(json_bool_pair "tailscale_mark_rule" "${FW_TAILSCALE_MARK_RULE}")"
+    "$(json_bool_pair "tailscale_table_present" "${FW_TAILSCALE_TABLE_PRESENT}")"
+    "$(json_bool_pair "chain_mangle" "${FW_CHAIN_MANGLE}")"
+    "$(json_bool_pair "chain_nat" "${FW_CHAIN_NAT}")"
+    "$(json_bool_pair "chain_dns_mangle" "${FW_CHAIN_DNS_MANGLE}")"
+    "$(json_bool_pair "chain_dns_nat" "${FW_CHAIN_DNS_NAT}")"
+    "$(json_bool_pair "route_rule" "${FW_ROUTE_RULE}")"
     "$(json_bool_pair "route_table_installed" "${FW_ROUTE_TABLE_INSTALLED}")"
+  )
+
+  local IFS=,
+  printf '{%s}\n' "${fields[*]}"
 }
 
 firewall_status() {
-  load_config || true
+  load_config
   if [[ "${BOX_OUTPUT_FORMAT}" == "json" ]]; then
     firewall_status_json
   else

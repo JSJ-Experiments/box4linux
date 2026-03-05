@@ -75,7 +75,7 @@ case "${cmd}" in
         if ! grep -Fq "CHAIN|${family}|${table}|${chain}" "${STATE_FILE}"; then
           exit 1
         fi
-        grep -F "RULE|${family}|${table}|${chain}|" "${STATE_FILE}" | sed "s|^RULE|rule|;s|${family}|${family}|"
+        grep -F "RULE|${family}|${table}|${chain}|" "${STATE_FILE}" | sed "s|^RULE|rule|"
         exit 0
         ;;
     esac

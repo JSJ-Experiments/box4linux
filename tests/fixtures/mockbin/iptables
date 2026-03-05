@@ -30,7 +30,21 @@ fi
 
 chain_exists() {
   local chain="$1"
+  case "${table}:${chain}" in
+    filter:INPUT|filter:FORWARD|filter:OUTPUT|\
+    nat:PREROUTING|nat:INPUT|nat:OUTPUT|nat:POSTROUTING|\
+    mangle:PREROUTING|mangle:INPUT|mangle:FORWARD|mangle:OUTPUT|mangle:POSTROUTING|\
+    raw:PREROUTING|raw:OUTPUT|\
+    security:INPUT|security:FORWARD|security:OUTPUT)
+      return 0
+      ;;
+  esac
   grep -Fqx "CHAIN|${table}|${chain}" "${STATE_FILE}"
+}
+
+missing_chain_error() {
+  printf 'No chain/target/match by that name.\n' >&2
+  exit 1
 }
 
 rule_exists() {
@@ -61,6 +75,9 @@ case "${args[0]:-}" in
     ;;
   -X)
     chain="${args[1]}"
+    if ! chain_exists "${chain}"; then
+      missing_chain_error
+    fi
     grep -Fv "CHAIN|${table}|${chain}" "${STATE_FILE}" >"${STATE_FILE}.tmp" || true
     grep -Fv "RULE|${table}|${chain}|" "${STATE_FILE}.tmp" >"${STATE_FILE}.tmp2" || true
     mv "${STATE_FILE}.tmp2" "${STATE_FILE}"
@@ -68,11 +85,17 @@ case "${args[0]:-}" in
     ;;
   -F)
     chain="${args[1]}"
+    if ! chain_exists "${chain}"; then
+      missing_chain_error
+    fi
     grep -Fv "RULE|${table}|${chain}|" "${STATE_FILE}" >"${STATE_FILE}.tmp" || true
     mv "${STATE_FILE}.tmp" "${STATE_FILE}"
     ;;
   -A)
     chain="${args[1]}"
+    if ! chain_exists "${chain}"; then
+      missing_chain_error
+    fi
     rule="${args[*]:2}"
     if ! rule_exists "${chain}" "${rule}"; then
       printf 'RULE|%s|%s|%s\n' "${table}" "${chain}" "${rule}" >>"${STATE_FILE}"
@@ -80,11 +103,17 @@ case "${args[0]:-}" in
     ;;
   -C)
     chain="${args[1]}"
+    if ! chain_exists "${chain}"; then
+      missing_chain_error
+    fi
     rule="${args[*]:2}"
     rule_exists "${chain}" "${rule}"
     ;;
   -D)
     chain="${args[1]}"
+    if ! chain_exists "${chain}"; then
+      missing_chain_error
+    fi
     rule="${args[*]:2}"
     grep -Fv "RULE|${table}|${chain}|${rule}" "${STATE_FILE}" >"${STATE_FILE}.tmp" || true
     mv "${STATE_FILE}.tmp" "${STATE_FILE}"

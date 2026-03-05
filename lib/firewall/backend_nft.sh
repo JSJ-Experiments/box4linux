@@ -63,7 +63,7 @@ backend_nft_init() {
 backend_nft_rule_line_matches_box() {
   local line="${1:-}"
   [[ "${line}" == *"fwmark ${BOX_FWMARK}"* ]] && \
-    ([[ "${line}" == *" lookup ${BOX_ROUTE_TABLE}"* ]] || [[ "${line}" == *" table ${BOX_ROUTE_TABLE}"* ]])
+    { [[ "${line}" == *" lookup ${BOX_ROUTE_TABLE}"* ]] || [[ "${line}" == *" table ${BOX_ROUTE_TABLE}"* ]]; }
 }
 
 backend_nft_rule_line_pref() {
@@ -85,10 +85,8 @@ backend_nft_prune_box_policy_rules() {
     if backend_nft_rule_line_matches_box "${line}"; then
       pref="$(backend_nft_rule_line_pref "${line}" 2>/dev/null || true)"
       if [[ -n "${pref}" ]]; then
-        trace_cmd "firewall" "${ip_tool}" rule del pref "${pref}"
         "${ip_tool}" rule del pref "${pref}" >/dev/null 2>&1 || true
       else
-        trace_cmd "firewall" "${ip_tool}" rule del fwmark "${BOX_FWMARK}" table "${BOX_ROUTE_TABLE}"
         "${ip_tool}" rule del fwmark "${BOX_FWMARK}" table "${BOX_ROUTE_TABLE}" >/dev/null 2>&1 || true
       fi
     fi
@@ -100,10 +98,8 @@ backend_nft_ensure_policy_route() {
   ip_tool="$(nft_ip_cmd)"
   backend_nft_prune_box_policy_rules
 
-  trace_cmd "firewall" "${ip_tool}" rule add fwmark "${BOX_FWMARK}" table "${BOX_ROUTE_TABLE}" pref "${BOX_ROUTE_PREF}"
   "${ip_tool}" rule add fwmark "${BOX_FWMARK}" table "${BOX_ROUTE_TABLE}" pref "${BOX_ROUTE_PREF}" >/dev/null 2>&1 || true
   if ! "${ip_tool}" route show table "${BOX_ROUTE_TABLE}" 2>/dev/null | grep -Fq "local default dev lo"; then
-    trace_cmd "firewall" "${ip_tool}" route add local default dev lo table "${BOX_ROUTE_TABLE}"
     "${ip_tool}" route add local default dev lo table "${BOX_ROUTE_TABLE}" >/dev/null 2>&1 || true
   fi
 }
@@ -114,16 +110,13 @@ backend_nft_cleanup() {
   ip_tool="$(nft_ip_cmd || true)"
 
   if [[ -n "${nft}" ]]; then
-    trace_cmd "firewall" "${nft}" delete table inet "${BOX_NFT_TABLE_INET}"
     "${nft}" delete table inet "${BOX_NFT_TABLE_INET}" >/dev/null 2>&1 || true
-    trace_cmd "firewall" "${nft}" delete table ip "${BOX_NFT_TABLE_IP}"
     "${nft}" delete table ip "${BOX_NFT_TABLE_IP}" >/dev/null 2>&1 || true
   fi
 
   if [[ -n "${ip_tool}" ]]; then
     backend_nft_prune_box_policy_rules
     while "${ip_tool}" route show table "${BOX_ROUTE_TABLE}" 2>/dev/null | grep -Fq "local default dev lo"; do
-      trace_cmd "firewall" "${ip_tool}" route del local default dev lo table "${BOX_ROUTE_TABLE}"
       "${ip_tool}" route del local default dev lo table "${BOX_ROUTE_TABLE}" >/dev/null 2>&1 || break
     done
   fi
@@ -259,7 +252,6 @@ backend_nft_apply_mode() {
   }
 
   nft="$(nft_cmd)"
-  trace_cmd "firewall" "${nft}" -f -
   if ! printf '%s\n' "${ruleset}" | "${nft}" -f - >/dev/null 2>&1; then
     FW_LAST_ERROR="nft apply failed"
     backend_nft_cleanup || true
@@ -292,7 +284,11 @@ backend_nft_collect_status() {
   FW_TAILSCALE_MARK_RULE="false"
   FW_TAILSCALE_TABLE_PRESENT="false"
   FW_TAILSCALE_BYPASS_APPLIED="false"
-  FW_CAP_DETAILS="backend=nftables,available=false"
+  FW_CAP_IPV4="false"
+  FW_CAP_IPV6="false"
+  FW_DRY_RUN_SUPPORTED="true"
+  FW_DNS_COEXIST_MODE_ACTIVE="${BOX_DNS_COEXIST_MODE}"
+  FW_CAP_DETAILS="backend=nftables,available=false,ipv4=false,ipv6=false,tproxy=false,dry_run=true"
   FW_LAST_ERROR=""
 
   nft="$(nft_cmd || true)"
@@ -302,7 +298,13 @@ backend_nft_collect_status() {
     return 0
   fi
 
+  if ! "${nft}" list tables >/dev/null 2>&1; then
+    FW_LAST_ERROR="nftables inspection unavailable (need root/CAP_NET_ADMIN or kernel support)"
+    return 0
+  fi
+
   FW_BACKEND_AVAILABLE="true"
+  FW_CAP_IPV4="true"
   if "${nft}" list table inet "${BOX_NFT_TABLE_INET}" >/dev/null 2>&1; then
     FW_CHAIN_MANGLE="true"
     FW_CHAIN_DNS_MANGLE="true"
@@ -312,7 +314,7 @@ backend_nft_collect_status() {
     FW_CHAIN_DNS_NAT="true"
   fi
   if backend_nft_probe_tproxy; then FW_CAP_TPROXY="true"; fi
-  FW_CAP_DETAILS="backend=nftables,available=true,tproxy=${FW_CAP_TPROXY}"
+  FW_CAP_DETAILS="backend=nftables,available=true,ipv4=true,ipv6=false,tproxy=${FW_CAP_TPROXY},dry_run=true"
   if "${ip_tool}" rule list 2>/dev/null | grep -Eq "fwmark[[:space:]]+${BOX_FWMARK}[[:space:]]+(lookup|table)[[:space:]]+${BOX_ROUTE_TABLE}"; then FW_ROUTE_RULE="true"; fi
   if "${ip_tool}" route show table "${BOX_ROUTE_TABLE}" 2>/dev/null | grep -Fq "local default dev lo"; then FW_ROUTE_TABLE_INSTALLED="true"; fi
   if "${ip_tool}" rule list 2>/dev/null | grep -Eq "fwmark[[:space:]]+${BOX_TAILSCALE_FWMARK}[[:space:]]+(lookup|table)[[:space:]]+${BOX_TAILSCALE_ROUTE_TABLE}"; then

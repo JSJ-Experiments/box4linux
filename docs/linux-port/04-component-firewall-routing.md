@@ -76,6 +76,7 @@ If unsupported, apply controlled downgrade with explicit logs.
 For hosts that run Tailscale alongside Box, firewall apply/cleanup must preserve Tailscale routing and DNS behavior.
 
 Hard requirements:
+
 - Never flush/delete non-BOX chains or global policy rules.
 - Never touch Tailscale policy-routing entries (commonly table `52`, fwmark rules like `0x80000/0xff0000`, or rule priorities around `5210..5270`).
 - Add explicit bypass for Tailscale interface traffic:
@@ -88,6 +89,7 @@ Hard requirements:
 - Keep Box rule/table/pref IDs configurable and in a dedicated namespace to avoid collisions with existing local policy routing (for example `2022`, `2024`, `52` already in use on some hosts).
 
 DNS guidance:
+
 - When transparent DNS interception is enabled, provide `dns_exclude_servers` and `dns_exclude_domains` settings.
 - Default excludes should include Tailscale resolver and tailnet domains (`*.ts.net` and local MagicDNS suffix).
 

@@ -7,28 +7,29 @@ set -euo pipefail
 BOX_CONFIG_FILE="${BOX_CONFIG_FILE:-}"
 BOX_CONFIG_SOURCE="${BOX_CONFIG_SOURCE:-}"
 
-BOX_CORE="mihomo"
-BOX_NETWORK_MODE="tun"
-BOX_TPROXY_PORT="9898"
-BOX_REDIR_PORT="9797"
-BOX_DNS_PORT="1053"
-BOX_DNS_HIJACK_MODE="tproxy"
-BOX_DNS_COEXIST_MODE="preserve_tailnet"
-BOX_TAILSCALE_IFACE="tailscale0"
-BOX_TAILNET_IPV4_CIDR="100.64.0.0/10"
-BOX_TAILNET_IPV6_CIDR="fd7a:115c:a1e0::/48"
-BOX_TAILSCALE_DNS_RESOLVER="100.100.100.100"
-BOX_TAILSCALE_FWMARK="0x80000/0xff0000"
-BOX_TAILSCALE_ROUTE_TABLE="52"
+# Runtime config values; initialized via config_defaults().
+BOX_CORE=""
+BOX_NETWORK_MODE=""
+BOX_TPROXY_PORT=""
+BOX_REDIR_PORT=""
+BOX_DNS_PORT=""
+BOX_DNS_HIJACK_MODE=""
+BOX_DNS_COEXIST_MODE=""
+BOX_TAILSCALE_IFACE=""
+BOX_TAILNET_IPV4_CIDR=""
+BOX_TAILNET_IPV6_CIDR=""
+BOX_TAILSCALE_DNS_RESOLVER=""
+BOX_TAILSCALE_FWMARK=""
+BOX_TAILSCALE_ROUTE_TABLE=""
 
-BOX_FIREWALL_BACKEND="iptables"
-BOX_ROUTE_TABLE="2024"
-BOX_ROUTE_PREF="100"
-BOX_FWMARK="16777216/16777216"
+BOX_FIREWALL_BACKEND=""
+BOX_ROUTE_TABLE=""
+BOX_ROUTE_PREF=""
+BOX_FWMARK=""
 
-BOX_CORE_BIN_DIR="/usr/local/bin"
-BOX_CORE_WORKDIR="${BOX_VAR_DIR_DEFAULT}"
-BOX_CORE_CONFIG_SOURCE="/etc/box/profiles/config.yaml"
+BOX_CORE_BIN_DIR=""
+BOX_CORE_WORKDIR=""
+BOX_CORE_CONFIG_SOURCE=""
 
 config_defaults() {
   BOX_CORE="mihomo"
@@ -53,6 +54,9 @@ config_defaults() {
   BOX_CORE_CONFIG_SOURCE="/etc/box/profiles/config.yaml"
 }
 
+# Keep sourced-state deterministic even before load_config is called.
+config_defaults
+
 trim_space() {
   local value="${1:-}"
   value="${value#"${value%%[![:space:]]*}"}"
@@ -62,7 +66,9 @@ trim_space() {
 
 strip_inline_comment() {
   local value="${1:-}"
-  local first_char="${value:0:1}"
+  local trimmed first_char
+  trimmed="${value#"${value%%[![:space:]]*}"}"
+  first_char="${trimmed:0:1}"
   if [[ "${first_char}" == "\"" || "${first_char}" == "'" ]]; then
     printf '%s' "${value}"
     return
@@ -125,8 +131,20 @@ config_read_value() {
 }
 
 config_detect_file() {
-  local system_cfg="${BOX_CONFIG_FILE:-${BOX_ETC_DIR_DEFAULT}/box.toml}"
+  local explicit_cfg="${BOX_CONFIG_FILE:-}"
+  local system_cfg="${BOX_ETC_DIR_DEFAULT}/box.toml"
   local dev_cfg="${BOX_REPO_ROOT}/etc/box/box.toml"
+
+  if [[ -n "${explicit_cfg}" ]]; then
+    if [[ -f "${explicit_cfg}" ]]; then
+      BOX_CONFIG_FILE="${explicit_cfg}"
+      BOX_CONFIG_SOURCE="explicit"
+      return 0
+    fi
+    BOX_CONFIG_SOURCE="explicit-missing"
+    log "ERROR" "config" "E_CONFIG_FILE" "explicit BOX_CONFIG_FILE does not exist: ${explicit_cfg}"
+    return "${E_CONFIG}"
+  fi
 
   if [[ -f "${system_cfg}" ]]; then
     BOX_CONFIG_FILE="${system_cfg}"
@@ -148,6 +166,11 @@ config_detect_file() {
 validate_port() {
   local value="${1:-}"
   [[ "${value}" =~ ^[0-9]+$ ]] && (( value >= 1 && value <= 65535 ))
+}
+
+validate_uint() {
+  local value="${1:-}"
+  [[ "${value}" =~ ^[0-9]+$ ]]
 }
 
 validate_config() {
@@ -196,6 +219,20 @@ validate_config() {
       ;;
   esac
 
+  if ! validate_uint "${BOX_ROUTE_TABLE}"; then
+    log "ERROR" "config" "E_CONFIG_ROUTE_TABLE" "route_table must be numeric: ${BOX_ROUTE_TABLE}"
+    return "${E_CONFIG}"
+  fi
+  if ! validate_uint "${BOX_TAILSCALE_ROUTE_TABLE}"; then
+    log "ERROR" "config" "E_CONFIG_TAILSCALE_ROUTE_TABLE" \
+      "tailscale_route_table must be numeric: ${BOX_TAILSCALE_ROUTE_TABLE}"
+    return "${E_CONFIG}"
+  fi
+  if ! validate_uint "${BOX_ROUTE_PREF}"; then
+    log "ERROR" "config" "E_CONFIG_ROUTE_PREF" "route_pref must be numeric: ${BOX_ROUTE_PREF}"
+    return "${E_CONFIG}"
+  fi
+
   if [[ "${BOX_ROUTE_TABLE}" == "${BOX_TAILSCALE_ROUTE_TABLE}" ]]; then
     log "ERROR" "config" "E_CONFIG_ROUTE_TABLE" \
       "box route_table (${BOX_ROUTE_TABLE}) must differ from tailscale_route_table (${BOX_TAILSCALE_ROUTE_TABLE})"
@@ -226,6 +263,9 @@ load_config() {
   config_defaults
 
   if ! config_detect_file; then
+    if [[ "${BOX_CONFIG_SOURCE}" == "explicit-missing" ]]; then
+      return "${E_CONFIG}"
+    fi
     log "WARN" "config" "W_CONFIG_DEFAULTS" "no box.toml found; using defaults"
     validate_config
     export BOX_CONFIG_FILE BOX_CONFIG_SOURCE
@@ -263,6 +303,9 @@ load_config() {
 
   validate_config
 
+  # validate_config constrains BOX_CORE and BOX_CONFIG_FILE/BOX_CONFIG_SOURCE inputs.
+  # For sing-box, if the config source remains the default YAML profile path, rewrite
+  # it to the JSON profile path before export; sing-box expects JSON at runtime.
   if [[ "${BOX_CORE}" == "sing-box" && "${BOX_CORE_CONFIG_SOURCE}" == "/etc/box/profiles/config.yaml" ]]; then
     BOX_CORE_CONFIG_SOURCE="/etc/box/profiles/config.json"
   fi
