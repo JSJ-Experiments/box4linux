@@ -48,8 +48,9 @@ Policy/watcher implications:
 - Do not assume a single DNS authority.
 - Detect and log current per-link DNS owners before applying DNS interception.
 - Add a `dns_coexist_mode` policy:
-- `preserve_tailnet` (default): never hijack Tailscale DNS resolver/domain set.
-- `proxy_all`: allow full DNS hijack (explicit opt-in).
+  - accepted values: `preserve_tailnet|strict_box`
+  - `preserve_tailnet` (default): do not hijack Tailscale resolver/domain path; preserve MagicDNS/system resolver flow.
+  - `strict_box`: explicit opt-in for full Box DNS hijack behavior.
 - If `preserve_tailnet`, route `*.ts.net`/MagicDNS via system resolver path and bypass proxy DNS interception for Tailscale resolver.
 
 ## Concurrency and Locking

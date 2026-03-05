@@ -32,7 +32,7 @@ main() {
     fi
   done
 
-  enable_command_trace "${component:-boxctl}"
+  enable_command_trace "${component:-boxctl}" "${action:-none}"
   trap 'disable_command_trace' EXIT
 
   case "${component}" in

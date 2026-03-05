@@ -22,7 +22,7 @@ adapter_mihomo_check_config() {
   local bin="${1:?missing mihomo binary path}"
   local rendered_config="${2:?missing rendered config path}"
   local workdir="${3:?missing workdir}"
-  "${bin}" -t -d "${workdir}" -f "${rendered_config}" >/dev/null 2>&1
+  "${bin}" -t -d "${workdir}" -f "${rendered_config}" >/dev/null
 }
 
 adapter_mihomo_start() {
@@ -36,6 +36,11 @@ adapter_mihomo_start() {
 }
 
 adapter_mihomo_reload() {
-  # TODO(phase-2): call mihomo external-controller reload endpoint.
-  return 0
+  local msg="mihomo reload is not implemented yet; restart is required"
+  if declare -F log >/dev/null 2>&1; then
+    log "WARN" "service" "MIHOMO_RELOAD_UNIMPLEMENTED" "${msg}"
+  else
+    printf 'WARN: %s\n' "${msg}" >&2
+  fi
+  return 1
 }

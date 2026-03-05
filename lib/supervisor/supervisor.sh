@@ -96,6 +96,7 @@ check_core_config() {
     mihomo) adapter_mihomo_check_config "${bin}" "${rendered_path}" "${workdir}" ;;
     sing-box) adapter_sing_box_check_config "${bin}" "${rendered_path}" "${workdir}" ;;
     *)
+      log "ERROR" "service" "E_CORE_UNSUPPORTED" "unsupported core during config check: ${BOX_CORE}"
       return "${E_CORE_START}"
       ;;
   esac
@@ -118,9 +119,14 @@ start_core_process() {
 
 write_runtime_snapshot() {
   local status="${1:?missing status}"
-  local pid="${2:-0}"
+  local pid_raw="${2:-0}"
+  local pid_num="0"
   local rendered_config="${3:-}"
   local state_file
+  case "${pid_raw}" in
+    ''|*[!0-9]*) pid_num="0" ;;
+    *) pid_num="${pid_raw}" ;;
+  esac
   state_file="$(service_state_file)"
 
   cat >"${state_file}" <<EOF
@@ -130,7 +136,7 @@ write_runtime_snapshot() {
   "core": "${BOX_CORE}",
   "network_mode": "${BOX_NETWORK_MODE}",
   "dns_hijack_mode": "${BOX_DNS_HIJACK_MODE}",
-  "pid": "${pid}",
+  "pid": ${pid_num},
   "rendered_config": "$(json_escape "${rendered_config}")",
   "config_source": "$(json_escape "${BOX_CONFIG_FILE:-}")"
 }
@@ -225,9 +231,13 @@ service_stop() {
   with_lock "service" 30 service_stop_locked
 }
 
+service_restart_locked() {
+  service_stop_locked
+  service_start_locked
+}
+
 service_restart() {
-  service_stop
-  service_start
+  with_lock "service" 30 service_restart_locked
 }
 
 service_print_status_text() {
@@ -260,7 +270,10 @@ service_print_status_json() {
 service_status() {
   local previous_log_to_file="${BOX_LOG_TO_FILE:-1}"
   BOX_LOG_TO_FILE=0
-  load_config || true
+  if ! load_config; then
+    BOX_LOG_TO_FILE="${previous_log_to_file}"
+    return "${E_CONFIG}"
+  fi
   BOX_LOG_TO_FILE="${previous_log_to_file}"
 
   local pid_file pid status rendered_path

@@ -4,6 +4,17 @@
 
 set -euo pipefail
 
+mutator_sing_box_write_overlay_env() {
+  local rendered_file="${1:?missing rendered file}"
+  cat >"${rendered_file}.overlay.env" <<EOF
+network_mode=${BOX_NETWORK_MODE}
+dns_hijack_mode=${BOX_DNS_HIJACK_MODE}
+tproxy_port=${BOX_TPROXY_PORT}
+redir_port=${BOX_REDIR_PORT}
+dns_port=${BOX_DNS_PORT}
+EOF
+}
+
 mutator_sing_box_render_overlay() {
   local source_file="${1:?missing source file}"
   local rendered_file="${2:?missing rendered file}"
@@ -28,6 +39,7 @@ mutator_sing_box_render_overlay() {
         })
       }
       ' "${source_file}" >"${rendered_file}"
+    mutator_sing_box_write_overlay_env "${rendered_file}"
     return 0
   fi
 
@@ -46,11 +58,5 @@ mutator_sing_box_render_overlay() {
 EOF
   fi
 
-  cat >"${rendered_file}.overlay.env" <<EOF
-network_mode=${BOX_NETWORK_MODE}
-dns_hijack_mode=${BOX_DNS_HIJACK_MODE}
-tproxy_port=${BOX_TPROXY_PORT}
-redir_port=${BOX_REDIR_PORT}
-dns_port=${BOX_DNS_PORT}
-EOF
+  mutator_sing_box_write_overlay_env "${rendered_file}"
 }

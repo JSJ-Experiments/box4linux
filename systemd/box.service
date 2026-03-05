@@ -8,7 +8,6 @@ Type=oneshot
 RemainAfterExit=yes
 ExecStart=/usr/bin/boxctl service start
 ExecStop=/usr/bin/boxctl service stop
-ExecReload=/usr/bin/boxctl service restart
 TimeoutStartSec=120
 TimeoutStopSec=60
 

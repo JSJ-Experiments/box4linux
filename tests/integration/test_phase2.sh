@@ -99,6 +99,15 @@ must_run() {
   printf '%s\n' "${output}"
 }
 
+must_fail() {
+  local output
+  if output="$("$BOXCTL" "$@" 2>&1)"; then
+    printf 'UNEXPECTED SUCCESS: boxctl %s\n%s\n' "$*" "${output}" >&2
+    exit 1
+  fi
+  printf '%s\n' "${output}"
+}
+
 assert_contains() {
   local haystack="${1:?missing haystack}"
   local needle="${2:?missing needle}"
@@ -188,8 +197,18 @@ assert_magicdns_bypass_rules() {
     cat "${MOCK_IPTABLES_STATE}" >&2
     exit 1
   fi
+  if ! grep -Fq 'RULE|mangle|BOX_DNS_MANGLE|-d 100.100.100.100 -p tcp --dport 53 -j RETURN' "${MOCK_IPTABLES_STATE}"; then
+    printf 'ASSERT MAGICDNS FAILED: TCP resolver bypass missing\n' >&2
+    cat "${MOCK_IPTABLES_STATE}" >&2
+    exit 1
+  fi
   if ! grep -Fq 'RULE|nat|BOX_DNS_NAT|-d 100.100.100.100 -p udp --dport 53 -j RETURN' "${MOCK_IPTABLES_STATE}"; then
     printf 'ASSERT MAGICDNS FAILED: NAT resolver bypass missing\n' >&2
+    cat "${MOCK_IPTABLES_STATE}" >&2
+    exit 1
+  fi
+  if ! grep -Fq 'RULE|nat|BOX_DNS_NAT|-d 100.100.100.100 -p tcp --dport 53 -j RETURN' "${MOCK_IPTABLES_STATE}"; then
+    printf 'ASSERT MAGICDNS FAILED: NAT TCP resolver bypass missing\n' >&2
     cat "${MOCK_IPTABLES_STATE}" >&2
     exit 1
   fi
@@ -230,7 +249,9 @@ assert_no_tailscale_bypass_rules() {
   if grep -Fq 'RULE|mangle|BOX_MANGLE|-i tailscale0 -j RETURN' "${MOCK_IPTABLES_STATE}" || \
     grep -Fq 'RULE|mangle|BOX_MANGLE|-m mark --mark 0x80000/0xff0000 -j RETURN' "${MOCK_IPTABLES_STATE}" || \
     grep -Fq 'RULE|mangle|BOX_DNS_MANGLE|-d 100.100.100.100 -p udp --dport 53 -j RETURN' "${MOCK_IPTABLES_STATE}" || \
-    grep -Fq 'RULE|nat|BOX_DNS_NAT|-d 100.100.100.100 -p udp --dport 53 -j RETURN' "${MOCK_IPTABLES_STATE}"; then
+    grep -Fq 'RULE|mangle|BOX_DNS_MANGLE|-d 100.100.100.100 -p tcp --dport 53 -j RETURN' "${MOCK_IPTABLES_STATE}" || \
+    grep -Fq 'RULE|nat|BOX_DNS_NAT|-d 100.100.100.100 -p udp --dport 53 -j RETURN' "${MOCK_IPTABLES_STATE}" || \
+    grep -Fq 'RULE|nat|BOX_DNS_NAT|-d 100.100.100.100 -p tcp --dport 53 -j RETURN' "${MOCK_IPTABLES_STATE}"; then
     printf 'ASSERT STRICT BOX FAILED: tailscale bypass rule unexpectedly present\n' >&2
     cat "${MOCK_IPTABLES_STATE}" >&2
     exit 1
@@ -300,10 +321,16 @@ run_firewall_mode_case() {
   assert_contains "${status_json}" "\"status\":\"enabled\""
   assert_contains "${status_json}" "\"mode\":\"${mode}\""
   assert_contains "${status_json}" "\"backend\":\"${backend}\""
+  assert_contains "${status_json}" "\"backend_selected\":\"${backend}\""
   assert_contains "${status_json}" "\"backend_capabilities\":"
+  assert_contains "${status_json}" "\"backend_available\":true"
   assert_contains "${status_json}" "\"dns_hijack_mode\":\"${dns_mode}\""
   assert_contains "${status_json}" "\"dns_coexist_mode\":\"${coexist_mode}\""
   assert_contains "${status_json}" "\"dns_coexist_mode_active\":\"${coexist_mode}\""
+  assert_contains "${status_json}" "\"cap_ipv4\":true"
+  assert_contains "${status_json}" "\"cap_ipv6\":false"
+  assert_contains "${status_json}" "\"dry_run_supported\":true"
+  assert_contains "${status_json}" "\"last_error\":\"\""
   assert_contains "${status_json}" "\"tailscale_iface\":\"tailscale0\""
   assert_contains "${status_json}" "\"tailscale_mark_rule\":true"
   assert_contains "${status_json}" "\"tailscale_table_present\":true"
@@ -321,25 +348,25 @@ run_firewall_mode_case() {
   assert_no_box_artifacts
 }
 
-printf '[1/8] firewall mode/dns apply+renew+disable idempotency (preserve_tailnet)\n'
+printf '[1/10] firewall mode/dns apply+renew+disable idempotency (preserve_tailnet)\n'
 run_firewall_mode_case "tun" "disable" "preserve_tailnet" "100" "iptables"
 run_firewall_mode_case "tproxy" "tproxy" "preserve_tailnet" "100" "iptables"
 run_firewall_mode_case "redirect" "redirect" "preserve_tailnet" "100" "iptables"
 run_firewall_mode_case "mixed" "tproxy" "preserve_tailnet" "100" "iptables"
 run_firewall_mode_case "enhance" "redirect" "preserve_tailnet" "100" "iptables"
 
-printf '[2/8] nftables backend mode/dns apply+renew+disable idempotency (preserve_tailnet)\n'
+printf '[2/10] nftables backend mode/dns apply+renew+disable idempotency (preserve_tailnet)\n'
 run_firewall_mode_case "tun" "disable" "preserve_tailnet" "100" "nftables"
 run_firewall_mode_case "tproxy" "tproxy" "preserve_tailnet" "100" "nftables"
 run_firewall_mode_case "redirect" "redirect" "preserve_tailnet" "100" "nftables"
 run_firewall_mode_case "mixed" "tproxy" "preserve_tailnet" "100" "nftables"
 run_firewall_mode_case "enhance" "redirect" "preserve_tailnet" "100" "nftables"
 
-printf '[3/8] coexist mode strict_box rule differences\n'
+printf '[3/10] coexist mode strict_box rule differences\n'
 run_firewall_mode_case "tproxy" "tproxy" "strict_box" "100" "iptables"
 run_firewall_mode_case "tproxy" "tproxy" "strict_box" "100" "nftables"
 
-printf '[4/8] route_pref convergence across renew\n'
+printf '[4/10] route_pref convergence across renew\n'
 write_config "mihomo" "tproxy" "tproxy" "${MIHOMO_SOURCE}" "preserve_tailnet" "100" "iptables"
 seed_tailscale_state
 must_run firewall enable >/dev/null
@@ -351,13 +378,31 @@ must_run firewall disable >/dev/null
 assert_tailscale_state_preserved
 assert_no_box_artifacts
 
-printf '[5/8] firewall dry-run surfaces intended operations\n'
+printf '[5/10] firewall dry-run surfaces intended operations\n'
 write_config "mihomo" "tproxy" "tproxy" "${MIHOMO_SOURCE}" "preserve_tailnet" "100" "nftables"
 dryrun_output="$(must_run firewall dry-run)"
 assert_contains "${dryrun_output}" "dry-run"
 assert_contains "${dryrun_output}" "backend=nftables"
 
-printf '[6/8] service status side-effect free\n'
+printf '[6/10] trace mode logs external commands with action context\n'
+BOX_TRACE_COMMANDS=1
+export BOX_TRACE_COMMANDS
+trace_output="$(must_run firewall status --json)"
+unset BOX_TRACE_COMMANDS
+assert_contains "${trace_output}" "event_id=TRACE_CMD"
+assert_contains "${trace_output}" "action=status"
+assert_contains "${trace_output}" "cmd="
+
+printf '[7/10] explicit BOX_CONFIG_FILE missing fails fast\n'
+missing_cfg="${TMP_DIR}/missing-explicit-box.toml"
+BOX_CONFIG_FILE="${missing_cfg}"
+export BOX_CONFIG_FILE
+fail_output="$(must_fail firewall status --json)"
+assert_contains "${fail_output}" "explicit BOX_CONFIG_FILE does not exist"
+BOX_CONFIG_FILE="${CONFIG_FILE}"
+export BOX_CONFIG_FILE
+
+printf '[8/10] service status side-effect free\n'
 write_config "mihomo" "tun" "disable" "${MIHOMO_SOURCE}" "preserve_tailnet" "100" "iptables"
 rm -rf "${BOX_RUN_DIR}/rendered"
 must_run service status --json >/dev/null
@@ -366,7 +411,7 @@ if [[ -d "${BOX_RUN_DIR}/rendered" ]]; then
   exit 1
 fi
 
-printf '[7/8] service lifecycle + mihomo overlay\n'
+printf '[9/10] service lifecycle + mihomo overlay\n'
 write_config "mihomo" "mixed" "redirect" "${MIHOMO_SOURCE}" "preserve_tailnet" "100" "iptables"
 seed_tailscale_state
 mihomo_checksum_before="$(sha256sum "${MIHOMO_SOURCE}" | awk '{print $1}')"
@@ -390,7 +435,7 @@ assert_tailscale_state_preserved
 service_json="$(must_run service status --json)"
 assert_contains "${service_json}" "\"status\":\"stopped\""
 
-printf '[8/8] service lifecycle + sing-box overlay\n'
+printf '[10/10] service lifecycle + sing-box overlay\n'
 write_config "sing-box" "tproxy" "tproxy" "${SING_SOURCE}" "preserve_tailnet" "100" "iptables"
 seed_tailscale_state
 sing_checksum_before="$(sha256sum "${SING_SOURCE}" | awk '{print $1}')"

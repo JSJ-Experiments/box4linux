@@ -2,6 +2,7 @@
 Description=Box Linux Firewall Manager
 PartOf=box.service
 After=network-online.target
+Wants=network-online.target
 
 [Service]
 Type=oneshot

@@ -65,10 +65,16 @@ log() {
   local component="${2:-main}"
   local event_id="${3:-GENERIC}"
   local message="${4:-}"
-  local ts log_line log_file
+  local escaped_message ts log_line log_file
+
+  escaped_message="${message//\\/\\\\}"
+  escaped_message="${escaped_message//\"/\\\"}"
+  escaped_message="${escaped_message//$'\n'/\\n}"
+  escaped_message="${escaped_message//$'\r'/\\r}"
+  escaped_message="${escaped_message//$'\t'/\\t}"
 
   ts="$(timestamp_utc)"
-  log_line="ts=${ts} level=${level} component=${component} event_id=${event_id} msg=\"${message}\""
+  log_line="ts=${ts} level=${level} component=${component} event_id=${event_id} msg=\"${escaped_message}\""
   printf '%s\n' "${log_line}" >&2
   if [[ "${BOX_LOG_TO_FILE}" == "1" ]]; then
     init_runtime_paths
@@ -133,18 +139,69 @@ trace_cmd() {
   if [[ "${BOX_TRACE_COMMANDS}" == "1" ]]; then
     local cmd
     printf -v cmd '%q ' "$@"
-    log "DEBUG" "${component}" "TRACE_CMD" "${cmd% }"
+    log "DEBUG" "${component}" "TRACE_CMD" "action=${BOX_TRACE_ACTION:-unknown} cmd=${cmd% }"
   fi
+}
+
+trace_external_command() {
+  local raw="${1:-}"
+  local trimmed token kind unresolved_cmd=0
+
+  [[ -n "${raw}" ]] || return 0
+
+  trimmed="${raw#"${raw%%[![:space:]]*}"}"
+  case "${trimmed}" in
+    [A-Za-z_]*=*) return 0 ;;
+  esac
+  while [[ -n "${trimmed}" ]]; do
+    token="${trimmed%%[[:space:]]*}"
+    if [[ "${token}" == *=* ]]; then
+      trimmed="${trimmed#"${token}"}"
+      trimmed="${trimmed#"${trimmed%%[![:space:]]*}"}"
+      continue
+    fi
+    break
+  done
+
+  token="${trimmed%%[[:space:];|&]*}"
+  [[ -n "${token}" ]] || return 0
+  case "${token}" in
+    awk|date|mkdir)
+      return 0
+      ;;
+  esac
+
+  case "${token}" in
+    \$*|\"\$*|\'\$*)
+      unresolved_cmd=1
+      ;;
+  esac
+  if [[ "${unresolved_cmd}" == "0" ]]; then
+    kind="$(type -t -- "${token}" 2>/dev/null || true)"
+    [[ "${kind}" == "file" ]] || return 0
+  fi
+
+  log "DEBUG" "${BOX_TRACE_COMPONENT:-trace}" "TRACE_CMD" \
+    "action=${BOX_TRACE_ACTION:-unknown} cmd=${raw}"
 }
 
 enable_command_trace() {
   local component="${1:-trace}"
+  local action="${2:-unknown}"
   if [[ "${BOX_TRACE_COMMANDS}" != "1" ]]; then
     return 0
   fi
   BOX_TRACE_COMPONENT="${component}"
-  export BOX_TRACE_COMPONENT
-  trap 'if [[ "${_BOX_TRACE_GUARD:-0}" == "0" ]]; then _BOX_TRACE_GUARD=1; case "${BASH_COMMAND}" in enable_command_trace*|disable_command_trace*|trace_cmd*|log* ) ;; * ) log "DEBUG" "${BOX_TRACE_COMPONENT}" "TRACE_CMD" "${BASH_COMMAND}" ;; esac; _BOX_TRACE_GUARD=0; fi' DEBUG
+  BOX_TRACE_ACTION="${action}"
+  export BOX_TRACE_COMPONENT BOX_TRACE_ACTION
+  if shopt -qo functrace; then
+    BOX_TRACE_FUNCTRACE_RESTORE="keep"
+  else
+    BOX_TRACE_FUNCTRACE_RESTORE="unset"
+    set -o functrace
+  fi
+  export BOX_TRACE_FUNCTRACE_RESTORE
+  trap 'if [[ "${_BOX_TRACE_GUARD:-0}" == "0" ]]; then _BOX_TRACE_GUARD=1; trace_external_command "${BASH_COMMAND:-}"; _BOX_TRACE_GUARD=0; fi' DEBUG
 }
 
 disable_command_trace() {
@@ -152,7 +209,11 @@ disable_command_trace() {
     return 0
   fi
   trap - DEBUG
-  unset BOX_TRACE_COMPONENT
+  if [[ "${BOX_TRACE_FUNCTRACE_RESTORE:-keep}" == "unset" ]]; then
+    set +o functrace
+  fi
+  unset BOX_TRACE_COMPONENT BOX_TRACE_ACTION
+  unset BOX_TRACE_FUNCTRACE_RESTORE
 }
 
 lock_path_for() {

@@ -22,7 +22,7 @@ adapter_sing_box_check_config() {
   local bin="${1:?missing sing-box binary path}"
   local rendered_config="${2:?missing rendered config path}"
   local workdir="${3:?missing workdir}"
-  "${bin}" check -c "${rendered_config}" -D "${workdir}" >/dev/null 2>&1
+  "${bin}" check -c "${rendered_config}" -D "${workdir}" >/dev/null
 }
 
 adapter_sing_box_start() {
