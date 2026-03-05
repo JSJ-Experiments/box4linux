@@ -8,7 +8,15 @@ config_source = "/etc/box/profiles/config.yaml"
 mode = "tun"
 tproxy_port = 9898
 redir_port = 9797
+dns_port = 1053
 dns_hijack_mode = "tproxy"
+dns_coexist_mode = "preserve_tailnet"
+tailscale_iface = "tailscale0"
+tailnet_ipv4_cidr = "100.64.0.0/10"
+tailnet_ipv6_cidr = "fd7a:115c:a1e0::/48"
+tailscale_dns_resolver = "100.100.100.100"
+tailscale_fwmark = "0x80000/0xff0000"
+tailscale_route_table = 52
 
 [firewall]
 backend = "iptables"

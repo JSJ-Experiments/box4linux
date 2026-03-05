@@ -38,6 +38,7 @@
 3. cgroup v1/v2 behavior mismatch
 4. core config mutation compatibility across core versions
 5. remote release asset naming changes
+6. DNS ownership conflicts with `systemd-resolved` + Tailscale + proxy-tun `~.` domains
 
 ## Known Baseline Issues (from source audit)
 - undefined `${settings}` writes in `box.service` and `box.iptables`
@@ -52,6 +53,11 @@
 - Modes: `tun`, `tproxy`, `redirect`, `mixed`, `enhance`
 - Cores: `mihomo`, `sing-box` (phase 1), then `xray`, `v2fly`, `hysteria`
 - IPv4-only / dual-stack
+- Tailscale present/absent
+- DNS stacks:
+- plain resolved
+- resolved + Tailscale MagicDNS
+- resolved + Tailscale + proxy tun default DNS domain (`~.`)
 
 ## Suggested Initial Milestone
 Deliver MVP with:
@@ -89,6 +95,7 @@ Then expand to remaining cores/modes.
 - no Android-only command/path usage
 - documented upgrade and rollback path
 - reproducible installation on at least two Linux distributions
+- Tailscale reachability and MagicDNS preserved when Box firewall is `enable`, `renew`, and `disable`
 
 ## Linux-Native Implementation Checklist
 Use this checklist during review to keep the port \"native\":

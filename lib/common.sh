@@ -21,6 +21,8 @@ BOX_VAR_DIR="${BOX_VAR_DIR:-${BOX_VAR_DIR_DEFAULT}}"
 BOX_RUN_DIR="${BOX_RUN_DIR:-${BOX_RUN_DIR_DEFAULT}}"
 BOX_LOG_DIR="${BOX_LOG_DIR:-${BOX_LOG_DIR_DEFAULT}}"
 BOX_LOCK_DIR="${BOX_LOCK_DIR:-${BOX_RUN_DIR}/locks}"
+BOX_OUTPUT_FORMAT="${BOX_OUTPUT_FORMAT:-text}"
+BOX_LOG_TO_FILE="${BOX_LOG_TO_FILE:-1}"
 
 E_CONFIG=10
 E_CORE_START=20
@@ -64,12 +66,14 @@ log() {
   local message="${4:-}"
   local ts log_line log_file
 
-  init_runtime_paths
   ts="$(timestamp_utc)"
   log_line="ts=${ts} level=${level} component=${component} event_id=${event_id} msg=\"${message}\""
   printf '%s\n' "${log_line}" >&2
-  log_file="${BOX_LOG_DIR}/${component}.log"
-  printf '%s\n' "${log_line}" >>"${log_file}" 2>/dev/null || true
+  if [[ "${BOX_LOG_TO_FILE}" == "1" ]]; then
+    init_runtime_paths
+    log_file="${BOX_LOG_DIR}/${component}.log"
+    printf '%s\n' "${log_line}" >>"${log_file}" 2>/dev/null || true
+  fi
 }
 
 require_cmd() {
@@ -81,9 +85,44 @@ require_cmd() {
 }
 
 require_root() {
+  if [[ "${BOX_UNSAFE_SKIP_ROOT_CHECK:-0}" == "1" ]]; then
+    return 0
+  fi
   if [[ "${EUID}" -ne 0 ]]; then
     log "ERROR" "common" "E_ROOT_REQUIRED" "this action requires root privileges"
     return 1
+  fi
+}
+
+json_escape() {
+  local raw="${1:-}"
+  raw="${raw//\\/\\\\}"
+  raw="${raw//\"/\\\"}"
+  raw="${raw//$'\n'/\\n}"
+  raw="${raw//$'\r'/\\r}"
+  raw="${raw//$'\t'/\\t}"
+  printf '%s' "${raw}"
+}
+
+json_pair() {
+  local key="${1:?missing key}"
+  local value="${2:-}"
+  printf '"%s":"%s"' "$(json_escape "${key}")" "$(json_escape "${value}")"
+}
+
+json_num_pair() {
+  local key="${1:?missing key}"
+  local value="${2:-0}"
+  printf '"%s":%s' "$(json_escape "${key}")" "${value}"
+}
+
+json_bool_pair() {
+  local key="${1:?missing key}"
+  local value="${2:-false}"
+  if [[ "${value}" == "true" || "${value}" == "1" ]]; then
+    printf '"%s":true' "$(json_escape "${key}")"
+  else
+    printf '"%s":false' "$(json_escape "${key}")"
   fi
 }
 

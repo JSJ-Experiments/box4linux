@@ -72,6 +72,25 @@ If unsupported, apply controlled downgrade with explicit logs.
 - Do not hardcode interface names like `wlan0`.
 - Make route table id configurable to avoid collisions.
 
+## Tailscale Coexistence Requirements
+For hosts that run Tailscale alongside Box, firewall apply/cleanup must preserve Tailscale routing and DNS behavior.
+
+Hard requirements:
+- Never flush/delete non-BOX chains or global policy rules.
+- Never touch Tailscale policy-routing entries (commonly table `52`, fwmark rules like `0x80000/0xff0000`, or rule priorities around `5210..5270`).
+- Add explicit bypass for Tailscale interface traffic:
+- `-i tailscale0 -j RETURN` and `-o tailscale0 -j RETURN` in relevant chains.
+- Add destination bypass CIDRs for tailnet traffic:
+- IPv4 `100.64.0.0/10`
+- IPv6 `fd7a:115c:a1e0::/48`
+- Exclude Tailscale DNS endpoint from DNS hijack:
+- `100.100.100.100:53`
+- Keep Box rule/table/pref IDs configurable and in a dedicated namespace to avoid collisions with existing local policy routing (for example `2022`, `2024`, `52` already in use on some hosts).
+
+DNS guidance:
+- When transparent DNS interception is enabled, provide `dns_exclude_servers` and `dns_exclude_domains` settings.
+- Default excludes should include Tailscale resolver and tailnet domains (`*.ts.net` and local MagicDNS suffix).
+
 ## Required Tests
 - each mode on IPv4-only and dual-stack
 - idempotent enable/renew/disable loops
