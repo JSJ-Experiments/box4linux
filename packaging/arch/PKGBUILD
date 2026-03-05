@@ -1,0 +1,42 @@
+# Maintainer: JadenJSJ <jadenjsj@proton.me>
+
+pkgname=box4linux
+pkgver=0.3.0
+pkgrel=1
+pkgdesc="Linux-native Box control plane"
+arch=('any')
+url="https://github.com/JSJ-Experiments/box4linux"
+license=('custom')
+depends=('bash' 'coreutils' 'iproute2' 'iptables' 'util-linux' 'gawk')
+optdepends=(
+  'nftables: nftables backend support'
+  'mihomo: mihomo core runtime'
+  'sing-box: sing-box core runtime'
+  'systemd: unit lifecycle management'
+)
+backup=('etc/box/box.toml')
+install='box4linux.install'
+source=()
+sha256sums=()
+
+package() {
+  local repo_root="${startdir}/../.."
+
+  install -d "${pkgdir}/usr/lib/box4linux"
+  cp -a "${repo_root}/lib" "${pkgdir}/usr/lib/box4linux/"
+
+  install -Dm755 "${repo_root}/cmd/boxctl" "${pkgdir}/usr/lib/box4linux/cmd/boxctl"
+  install -d "${pkgdir}/usr/bin"
+  ln -sf ../lib/box4linux/cmd/boxctl "${pkgdir}/usr/bin/boxctl"
+
+  install -Dm644 "${repo_root}/etc/box/box.toml" "${pkgdir}/etc/box/box.toml"
+
+  install -Dm644 "${repo_root}/systemd/box.service" "${pkgdir}/usr/lib/systemd/system/box.service"
+  install -Dm644 "${repo_root}/systemd/box-firewall.service" "${pkgdir}/usr/lib/systemd/system/box-firewall.service"
+
+  install -Dm644 "${repo_root}/README.md" "${pkgdir}/usr/share/doc/${pkgname}/README.md"
+  install -d "${pkgdir}/usr/share/doc/${pkgname}/linux-port"
+  cp -a "${repo_root}/docs/linux-port/." "${pkgdir}/usr/share/doc/${pkgname}/linux-port/"
+  install -Dm755 "${repo_root}/packaging/scripts/systemd-lifecycle.sh" \
+    "${pkgdir}/usr/share/doc/${pkgname}/systemd-lifecycle.sh"
+}

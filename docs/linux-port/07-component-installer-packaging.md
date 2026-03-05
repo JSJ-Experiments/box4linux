@@ -1,73 +1,83 @@
 # 07 - Component: Installer and Packaging
 
 ## Objective
-Replace Magisk module installation/update/uninstall flow with Linux package/deploy logic.
 
-## Baseline Installer Functions
-Current `box-reference/box/customize.sh` provides:
-- install payload
-- preserve old configs/binaries
-- optional interactive downloads
-- set permissions
-- install boot hook
+Deliver Linux-native packaging/install lifecycle for repo-root implementation (`cmd/`, `lib/`, `etc/`, `systemd/`, `tests/`) with safe upgrade and uninstall semantics.
 
-## Linux Packaging Targets
-Provide at least one of:
-1. Debian package (`.deb`)
-2. RPM package (`.rpm`)
-3. tarball installer (`install.sh`) fallback
+## Arch Packaging (Implemented)
 
-## Package Contents
-- `/usr/lib/box/` scripts
-- `/etc/box/` default configs
-- `/var/lib/box/` managed artifacts
-- `/usr/bin/boxctl` CLI
-- systemd unit/timer files
+Package assets:
+- `packaging/arch/PKGBUILD`
+- `packaging/arch/box4linux.install`
 
-## Install Script Responsibilities
-1. create service user/group (or root mode with capabilities)
-2. create directories and ownership
-3. install config templates without clobbering local overrides
-4. run migration for legacy config keys
-5. enable/start selected units
+Install paths:
+- `/usr/bin/boxctl`
+- `/usr/lib/box4linux/cmd/boxctl`
+- `/usr/lib/box4linux/lib/...`
+- `/etc/box/box.toml`
+- `/usr/lib/systemd/system/box.service`
+- `/usr/lib/systemd/system/box-firewall.service`
+- `/usr/share/doc/box4linux/`
 
-## Upgrade Strategy
-- preserve `/etc/box/*.toml`
-- preserve `/var/lib/box/bin/*` if newer than packaged versions
-- write migration report at `/var/log/box/migration.log`
+Build/install:
+1. `cd packaging/arch`
+2. `makepkg --noconfirm -f`
+3. `sudo pacman -U ./box4linux-*.pkg.tar.zst`
 
-## Uninstall Strategy
-Equivalent of `box-reference/box/uninstall.sh` but safe:
-- stop and disable all units
-- remove generated firewall/routing state
-- optionally keep config/data (`--purge` removes all)
+## Config Upgrade Behavior
 
-## Non-Interactive First
-Do not require interactive key events (volume key flow in `box-reference/box/customize.sh` is Android-only).
-Use explicit CLI flags instead:
-- `boxctl update --bootstrap`
-- `boxctl install --with-core sing-box`
+- `/etc/box/box.toml` is registered as a backup config in PKGBUILD.
+- Upgrades do not clobber local edits.
+- New upstream defaults are provided as `.pacnew` when necessary.
 
-## Install Transaction Steps
-1. precheck root + dependencies
-2. create users/groups and directories
-3. deploy binaries/scripts
-4. install config templates if missing
-5. migrate old config if present
-6. daemon-reload + enable units
-7. optional bootstrap update (`boxctl update kernel`)
-8. health check
+## Unit Lifecycle Safety
 
-On failure, rollback to previous known package state where possible.
+Helper script:
+- `packaging/scripts/systemd-lifecycle.sh`
+- Installed to `/usr/share/doc/box4linux/systemd-lifecycle.sh`
 
-## Post-Install Verification
-- `boxctl service status`
-- `boxctl firewall status`
-- `boxctl update check` (dry-run)
-- ensure required dirs exist with expected permissions
+Safe operations:
+- `enable`: daemon-reload, enable units, start service
+- `disable`: stop/disable units, daemon-reload
+- `restart`: restart units without touching config/data
 
-## Package Upgrade Hooks
-- `preinst`: stop services safely
-- `postinst`: run migration + restart
-- `prerm`: disable timers/services
-- `postrm`: optional purge
+Pacman hook behavior (`box4linux.install`):
+- `post_install`/`post_upgrade`: daemon-reload, operator guidance
+- `pre_remove`: best-effort `boxctl firewall disable`, `boxctl service stop`, disable units
+- `post_remove`: leave config/data unless manually purged
+
+## CI/Release Automation
+
+Workflow:
+- `.github/workflows/ci.yml`
+
+On push/PR:
+- shell syntax checks (`bash -n`)
+- shellcheck (when available)
+- `./tests/integration/test_phase2.sh`
+- `sudo ./tests/integration/test_real_kernel.sh` (skip-capable)
+- Arch package build in container
+- package smoke test (`./tests/integration/test_arch_package_smoke.sh`)
+
+On tag (`v*`):
+- publish built `.pkg.tar.*` artifact to GitHub Release
+
+## Smoke Validation
+
+Script:
+- `tests/integration/test_arch_package_smoke.sh`
+
+What it verifies:
+1. package can be extracted into a clean temp root
+2. installed paths/files exist
+3. `boxctl service status --json` works in installed layout
+4. `boxctl firewall status --json` works in installed layout
+5. `boxctl firewall dry-run` prints planned operations
+6. `systemd-analyze verify` runs when available
+
+## Uninstall / Rollback Notes
+
+- Default uninstall: `sudo pacman -R box4linux`
+- Keeps operator-managed data/config backups by default.
+- Explicit purge is manual and should be deliberate:
+  - `sudo rm -rf /etc/box /var/lib/box /run/box /var/log/box`

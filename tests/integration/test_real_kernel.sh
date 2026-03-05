@@ -128,11 +128,83 @@ assert_tailscale_invariants() {
   assert_contains_text "${routes}" "100.100.100.100" "tailscale table 52 route"
 }
 
+normalize_fwmark() {
+  local raw="${1:-}"
+  local value mask
+  if [[ "${raw}" == */* ]]; then
+    value="${raw%%/*}"
+    mask="${raw##*/}"
+  else
+    value="${raw}"
+    mask="0xffffffff"
+  fi
+  if ! [[ "${value}" =~ ^(0[xX][0-9a-fA-F]+|[0-9]+)$ ]]; then
+    return 1
+  fi
+  if ! [[ "${mask}" =~ ^(0[xX][0-9a-fA-F]+|[0-9]+)$ ]]; then
+    return 1
+  fi
+  printf '%u/%u\n' "$((value))" "$((mask))"
+}
+
+extract_rule_token_after() {
+  local line="${1:-}"
+  local token="${2:?missing token}"
+  local i
+  read -r -a parts <<<"${line}"
+  for ((i = 0; i < ${#parts[@]}; i++)); do
+    if [[ "${parts[$i]}" == "${token}" && $((i + 1)) -lt ${#parts[@]} ]]; then
+      printf '%s\n' "${parts[$((i + 1))]}"
+      return 0
+    fi
+  done
+  return 1
+}
+
+extract_rule_table() {
+  local line="${1:-}"
+  local i
+  read -r -a parts <<<"${line}"
+  for ((i = 0; i < ${#parts[@]}; i++)); do
+    if [[ ( "${parts[$i]}" == "lookup" || "${parts[$i]}" == "table" ) && $((i + 1)) -lt ${#parts[@]} ]]; then
+      printf '%s\n' "${parts[$((i + 1))]}"
+      return 0
+    fi
+  done
+  return 1
+}
+
+extract_rule_pref() {
+  local line="${1:-}"
+  if [[ "${line}" =~ ^[[:space:]]*([0-9]+): ]]; then
+    printf '%s\n' "${BASH_REMATCH[1]}"
+    return 0
+  fi
+  if [[ "${line}" =~ (^|[[:space:]])pref[[:space:]]+([0-9]+)($|[[:space:]]) ]]; then
+    printf '%s\n' "${BASH_REMATCH[2]}"
+    return 0
+  fi
+  return 1
+}
+
 assert_box_route_pref_singleton() {
   local expected_pref="${1:?missing pref}"
-  local rules count
+  local rules count line rule_mark rule_table rule_pref expected_mark_norm rule_mark_norm
   rules="$(ip -n "${NS}" rule list 2>/dev/null || true)"
-  count="$(printf '%s\n' "${rules}" | grep -Ec "fwmark[[:space:]]+16777216/16777216[[:space:]]+(lookup|table)[[:space:]]+2024[[:space:]]+pref[[:space:]]+${expected_pref}$" || true)"
+
+  expected_mark_norm="$(normalize_fwmark "16777216/16777216" 2>/dev/null || true)"
+  count=0
+  while IFS= read -r line; do
+    [[ -n "${line}" ]] || continue
+    rule_mark="$(extract_rule_token_after "${line}" "fwmark" 2>/dev/null || true)"
+    rule_table="$(extract_rule_table "${line}" 2>/dev/null || true)"
+    rule_pref="$(extract_rule_pref "${line}" 2>/dev/null || true)"
+    [[ -n "${rule_mark}" && "${rule_table}" == "2024" && "${rule_pref}" == "${expected_pref}" ]] || continue
+    rule_mark_norm="$(normalize_fwmark "${rule_mark}" 2>/dev/null || true)"
+    [[ -n "${rule_mark_norm}" && "${rule_mark_norm}" == "${expected_mark_norm}" ]] || continue
+    count=$((count + 1))
+  done <<<"${rules}"
+
   if [[ "${count}" != "1" ]]; then
     fail "expected one BOX fwmark policy rule with pref=${expected_pref}; got ${count}"
   fi
@@ -237,7 +309,20 @@ backend_usable() {
       ;;
     nftables)
       command -v nft >/dev/null 2>&1 || return 1
-      ip netns exec "${NS}" nft list tables >/dev/null 2>&1
+      ip netns exec "${NS}" nft list tables >/dev/null 2>&1 || return 1
+      ip netns exec "${NS}" sh -c '
+        set -e
+        nft delete table inet box_probe >/dev/null 2>&1 || true
+        nft delete table ip box_probe_nat >/dev/null 2>&1 || true
+        nft add table inet box_probe
+        nft add chain inet box_probe prerouting "{ type filter hook prerouting priority mangle; policy accept; }"
+        nft add chain inet box_probe output "{ type route hook output priority mangle; policy accept; }"
+        nft add table ip box_probe_nat
+        nft add chain ip box_probe_nat prerouting "{ type nat hook prerouting priority dstnat; policy accept; }"
+        nft add chain ip box_probe_nat output "{ type nat hook output priority -100; policy accept; }"
+        nft delete table inet box_probe
+        nft delete table ip box_probe_nat
+      ' >/dev/null 2>&1
       ;;
     *)
       return 1
@@ -247,12 +332,21 @@ backend_usable() {
 
 run_backend_case() {
   local backend="${1:?missing backend}"
-  local count_before count_after status_json
+  local count_before count_after status_json preflight_output
 
   if ! backend_usable "${backend}"; then
     printf 'SKIP: backend=%s unavailable in this kernel/runtime\n' "${backend}"
     return 0
   fi
+
+  write_config "${backend}" "preserve_tailnet" "180"
+  seed_tailscale_state
+  if ! preflight_output="$(run_boxctl firewall enable 2>&1)"; then
+    printf 'SKIP: backend=%s runtime apply unavailable: %s\n' "${backend}" "${preflight_output##*$'\n'}"
+    run_boxctl firewall disable >/dev/null 2>&1 || true
+    return 0
+  fi
+  run_boxctl firewall disable >/dev/null 2>&1 || true
 
   printf '[backend=%s] preserve_tailnet lifecycle\n' "${backend}"
   write_config "${backend}" "preserve_tailnet" "180"

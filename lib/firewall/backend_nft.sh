@@ -37,7 +37,68 @@ nft_mark_mask() {
   fi
 }
 
+nft_fwmark_normalize() {
+  local raw="${1:?missing fwmark}"
+  local value mask
+
+  if [[ "${raw}" == */* ]]; then
+    value="${raw%%/*}"
+    mask="${raw##*/}"
+  else
+    value="${raw}"
+    mask="0xffffffff"
+  fi
+
+  if ! [[ "${value}" =~ ^(0[xX][0-9a-fA-F]+|[0-9]+)$ ]]; then
+    return 1
+  fi
+  if ! [[ "${mask}" =~ ^(0[xX][0-9a-fA-F]+|[0-9]+)$ ]]; then
+    return 1
+  fi
+
+  printf '%u/%u\n' "$((value))" "$((mask))"
+}
+
+nft_fwmark_equal() {
+  local left="${1:?missing left fwmark}"
+  local right="${2:?missing right fwmark}"
+  local left_norm right_norm
+
+  left_norm="$(nft_fwmark_normalize "${left}" 2>/dev/null || true)"
+  right_norm="$(nft_fwmark_normalize "${right}" 2>/dev/null || true)"
+  [[ -n "${left_norm}" && -n "${right_norm}" && "${left_norm}" == "${right_norm}" ]]
+}
+
+backend_nft_rule_line_fwmark() {
+  local line="${1:-}"
+  local i
+  read -r -a parts <<<"${line}"
+  for ((i = 0; i < ${#parts[@]}; i++)); do
+    if [[ "${parts[$i]}" == "fwmark" && $((i + 1)) -lt ${#parts[@]} ]]; then
+      printf '%s\n' "${parts[$((i + 1))]}"
+      return 0
+    fi
+  done
+  return 1
+}
+
+backend_nft_rule_line_table() {
+  local line="${1:-}"
+  local i
+  read -r -a parts <<<"${line}"
+  for ((i = 0; i < ${#parts[@]}; i++)); do
+    if [[ ( "${parts[$i]}" == "lookup" || "${parts[$i]}" == "table" ) && $((i + 1)) -lt ${#parts[@]} ]]; then
+      printf '%s\n' "${parts[$((i + 1))]}"
+      return 0
+    fi
+  done
+  return 1
+}
+
 backend_nft_probe_tproxy() {
+  if [[ "${BOX_NFT_FORCE_NO_TPROXY:-0}" == "1" ]]; then
+    return 1
+  fi
   if [[ -n "${BOX_CAP_TPROXY:-}" ]]; then
     [[ "${BOX_CAP_TPROXY}" == "1" || "${BOX_CAP_TPROXY}" == "true" ]] && return 0
     return 1
@@ -62,8 +123,11 @@ backend_nft_init() {
 
 backend_nft_rule_line_matches_box() {
   local line="${1:-}"
-  [[ "${line}" == *"fwmark ${BOX_FWMARK}"* ]] && \
-    { [[ "${line}" == *" lookup ${BOX_ROUTE_TABLE}"* ]] || [[ "${line}" == *" table ${BOX_ROUTE_TABLE}"* ]]; }
+  local line_mark line_table
+  line_mark="$(backend_nft_rule_line_fwmark "${line}" 2>/dev/null || true)"
+  line_table="$(backend_nft_rule_line_table "${line}" 2>/dev/null || true)"
+  [[ -n "${line_mark}" && "${line_table}" == "${BOX_ROUTE_TABLE}" ]] || return 1
+  nft_fwmark_equal "${line_mark}" "${BOX_FWMARK}"
 }
 
 backend_nft_rule_line_pref() {
@@ -253,9 +317,29 @@ backend_nft_apply_mode() {
 
   nft="$(nft_cmd)"
   if ! printf '%s\n' "${ruleset}" | "${nft}" -f - >/dev/null 2>&1; then
-    FW_LAST_ERROR="nft apply failed"
-    backend_nft_cleanup || true
-    return "${E_FIREWALL_APPLY}"
+    # Some kernels expose nft userspace tproxy tokens but fail loading tproxy expressions.
+    # Retry once with explicit non-tproxy fallback before failing apply.
+    if backend_nft_probe_tproxy; then
+      log "WARN" "firewall" "FW_TPROXY_DOWNGRADE" "nft apply with tproxy failed; retrying without tproxy expressions"
+      backend_nft_cleanup || true
+      BOX_NFT_FORCE_NO_TPROXY=1
+      ruleset="$(backend_nft_build_ruleset "${mode}")" || {
+        unset BOX_NFT_FORCE_NO_TPROXY
+        FW_LAST_ERROR="failed to build nft fallback ruleset"
+        return "${E_FIREWALL_APPLY}"
+      }
+      if ! printf '%s\n' "${ruleset}" | "${nft}" -f - >/dev/null 2>&1; then
+        unset BOX_NFT_FORCE_NO_TPROXY
+        FW_LAST_ERROR="nft apply failed"
+        backend_nft_cleanup || true
+        return "${E_FIREWALL_APPLY}"
+      fi
+      unset BOX_NFT_FORCE_NO_TPROXY
+    else
+      FW_LAST_ERROR="nft apply failed"
+      backend_nft_cleanup || true
+      return "${E_FIREWALL_APPLY}"
+    fi
   fi
 
   case "${mode}" in

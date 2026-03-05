@@ -1,0 +1,130 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - '**'
+    tags:
+      - 'v*'
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  lint-and-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Bash syntax checks
+        run: |
+          bash -n \
+            cmd/boxctl \
+            lib/*.sh \
+            lib/firewall/*.sh \
+            lib/supervisor/*.sh \
+            tests/integration/test_phase2.sh \
+            tests/integration/test_real_kernel.sh \
+            tests/integration/test_arch_package_smoke.sh \
+            tests/fixtures/mockbin/ip \
+            tests/fixtures/mockbin/iptables \
+            packaging/scripts/systemd-lifecycle.sh \
+            packaging/arch/box4linux.install
+
+      - name: ShellCheck (if available)
+        run: |
+          if command -v shellcheck >/dev/null 2>&1; then
+            shellcheck \
+              cmd/boxctl \
+              lib/*.sh \
+              lib/firewall/*.sh \
+              lib/supervisor/*.sh \
+              tests/integration/test_phase2.sh \
+              tests/integration/test_real_kernel.sh \
+              tests/integration/test_arch_package_smoke.sh \
+              packaging/scripts/systemd-lifecycle.sh
+            shellcheck -s sh packaging/arch/box4linux.install
+          else
+            echo "shellcheck not available; skipping"
+          fi
+
+      - name: Mock integration tests
+        run: ./tests/integration/test_phase2.sh
+
+      - name: Real-kernel integration tests (skip-capable)
+        run: sudo ./tests/integration/test_real_kernel.sh
+
+  build-arch-package:
+    runs-on: ubuntu-latest
+    needs:
+      - lint-and-tests
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Build Arch package in container
+        run: |
+          docker run --rm \
+            -v "$PWD":/work \
+            -w /work \
+            archlinux:base-devel \
+            bash -lc '
+              set -euo pipefail
+              pacman -Syu --noconfirm --needed base-devel bash coreutils tar zstd
+              chmod -R a+rwX /work
+              su nobody -s /bin/bash -c "cd /work/packaging/arch && makepkg --nodeps --noconfirm -f"
+            '
+
+      - name: Capture package path
+        id: pkg
+        run: |
+          pkg_path="$(ls -1 packaging/arch/*.pkg.tar.* | head -n 1)"
+          echo "package_path=${pkg_path}" >> "${GITHUB_OUTPUT}"
+          echo "Built package: ${pkg_path}"
+
+      - name: Upload Arch package artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: box4linux-arch-pkg
+          path: ${{ steps.pkg.outputs.package_path }}
+
+  smoke-package:
+    runs-on: ubuntu-latest
+    needs:
+      - build-arch-package
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Download Arch package artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: box4linux-arch-pkg
+          path: ./dist
+
+      - name: Package smoke test
+        run: |
+          pkg_path="$(ls -1 ./dist/*.pkg.tar.* | head -n 1)"
+          ./tests/integration/test_arch_package_smoke.sh "${pkg_path}"
+
+  release:
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs:
+      - smoke-package
+    permissions:
+      contents: write
+    steps:
+      - name: Download Arch package artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: box4linux-arch-pkg
+          path: ./dist
+
+      - name: Publish release assets
+        uses: softprops/action-gh-release@v2
+        with:
+          files: ./dist/*.pkg.tar.*
+          generate_release_notes: true
