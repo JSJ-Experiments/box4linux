@@ -127,7 +127,54 @@ iptables_add_if_missing() {
 
   ipt="$(iptables_cmd)"
   if ! "${ipt}" -t "${table}" -C "$@" >/dev/null 2>&1; then
-    "${ipt}" -t "${table}" -A "$@"
+    if ! "${ipt}" -t "${table}" -A "$@"; then
+      return 1
+    fi
+    # iptables-nft can emit append failures on stderr in some kernels while
+    # still returning success; verify rule presence to enforce correctness.
+    if ! "${ipt}" -t "${table}" -C "$@" >/dev/null 2>&1; then
+      return 1
+    fi
+  fi
+  return 0
+}
+
+iptables_try_add_if_missing_quiet() {
+  local table="${1:?missing table}"
+  shift
+  local ipt
+
+  ipt="$(iptables_cmd)"
+  if "${ipt}" -t "${table}" -C "$@" >/dev/null 2>&1; then
+    return 0
+  fi
+  if ! "${ipt}" -t "${table}" -A "$@" >/dev/null 2>&1; then
+    return 1
+  fi
+  "${ipt}" -t "${table}" -C "$@" >/dev/null 2>&1
+}
+
+backend_iptables_rule_desc() {
+  local rendered
+  printf -v rendered '%q ' "$@"
+  printf '%s\n' "${rendered% }"
+}
+
+backend_iptables_ensure_chain_checked() {
+  local table="${1:?missing table}"
+  local chain="${2:?missing chain}"
+  if ! iptables_ensure_chain "${table}" "${chain}"; then
+    FW_LAST_ERROR="failed to ensure chain table=${table} chain=${chain}"
+    return "${E_FIREWALL_APPLY}"
+  fi
+}
+
+backend_iptables_add_rule_checked() {
+  local table="${1:?missing table}"
+  shift
+  if ! iptables_add_if_missing "${table}" "$@"; then
+    FW_LAST_ERROR="failed to add rule table=${table} rule=$(backend_iptables_rule_desc "$@")"
+    return "${E_FIREWALL_APPLY}"
   fi
 }
 
@@ -235,30 +282,30 @@ backend_iptables_cleanup() {
 }
 
 backend_iptables_apply_anti_loop() {
-  iptables_add_if_missing mangle "${BOX_CHAIN_MANGLE}" -i lo -j RETURN
-  iptables_add_if_missing mangle "${BOX_CHAIN_MANGLE}" -d 127.0.0.0/8 -j RETURN
-  iptables_add_if_missing nat "${BOX_CHAIN_NAT}" -i lo -j RETURN
-  iptables_add_if_missing nat "${BOX_CHAIN_NAT}" -d 127.0.0.0/8 -j RETURN
+  backend_iptables_add_rule_checked mangle "${BOX_CHAIN_MANGLE}" -i lo -j RETURN
+  backend_iptables_add_rule_checked mangle "${BOX_CHAIN_MANGLE}" -d 127.0.0.0/8 -j RETURN
+  backend_iptables_add_rule_checked nat "${BOX_CHAIN_NAT}" -i lo -j RETURN
+  backend_iptables_add_rule_checked nat "${BOX_CHAIN_NAT}" -d 127.0.0.0/8 -j RETURN
 }
 
 backend_iptables_apply_tailscale_bypass() {
   # Preserve tailscale transport and route ownership.
-  iptables_add_if_missing mangle "${BOX_CHAIN_MANGLE}" -i "${BOX_TAILSCALE_IFACE}" -j RETURN
-  iptables_add_if_missing mangle "${BOX_CHAIN_MANGLE}" -o "${BOX_TAILSCALE_IFACE}" -j RETURN
-  iptables_add_if_missing nat "${BOX_CHAIN_NAT}" -i "${BOX_TAILSCALE_IFACE}" -j RETURN
-  iptables_add_if_missing nat "${BOX_CHAIN_NAT}" -o "${BOX_TAILSCALE_IFACE}" -j RETURN
+  backend_iptables_add_rule_checked mangle "${BOX_CHAIN_MANGLE}" -i "${BOX_TAILSCALE_IFACE}" -j RETURN
+  backend_iptables_add_rule_checked mangle "${BOX_CHAIN_MANGLE}" -o "${BOX_TAILSCALE_IFACE}" -j RETURN
+  backend_iptables_add_rule_checked nat "${BOX_CHAIN_NAT}" -i "${BOX_TAILSCALE_IFACE}" -j RETURN
+  backend_iptables_add_rule_checked nat "${BOX_CHAIN_NAT}" -o "${BOX_TAILSCALE_IFACE}" -j RETURN
 
-  iptables_add_if_missing mangle "${BOX_CHAIN_MANGLE}" -d "${BOX_TAILNET_IPV4_CIDR}" -j RETURN
-  iptables_add_if_missing nat "${BOX_CHAIN_NAT}" -d "${BOX_TAILNET_IPV4_CIDR}" -j RETURN
+  backend_iptables_add_rule_checked mangle "${BOX_CHAIN_MANGLE}" -d "${BOX_TAILNET_IPV4_CIDR}" -j RETURN
+  backend_iptables_add_rule_checked nat "${BOX_CHAIN_NAT}" -d "${BOX_TAILNET_IPV4_CIDR}" -j RETURN
 
   # Keep existing tailscale-marked packets out of Box interception.
-  iptables_add_if_missing mangle "${BOX_CHAIN_MANGLE}" -m mark --mark "${BOX_TAILSCALE_FWMARK}" -j RETURN
+  backend_iptables_add_rule_checked mangle "${BOX_CHAIN_MANGLE}" -m mark --mark "${BOX_TAILSCALE_FWMARK}" -j RETURN
 
   # Preserve MagicDNS resolver reachability.
-  iptables_add_if_missing mangle "${BOX_CHAIN_DNS_MANGLE}" -d "${BOX_TAILSCALE_DNS_RESOLVER}" -p udp --dport 53 -j RETURN
-  iptables_add_if_missing mangle "${BOX_CHAIN_DNS_MANGLE}" -d "${BOX_TAILSCALE_DNS_RESOLVER}" -p tcp --dport 53 -j RETURN
-  iptables_add_if_missing nat "${BOX_CHAIN_DNS_NAT}" -d "${BOX_TAILSCALE_DNS_RESOLVER}" -p udp --dport 53 -j RETURN
-  iptables_add_if_missing nat "${BOX_CHAIN_DNS_NAT}" -d "${BOX_TAILSCALE_DNS_RESOLVER}" -p tcp --dport 53 -j RETURN
+  backend_iptables_add_rule_checked mangle "${BOX_CHAIN_DNS_MANGLE}" -d "${BOX_TAILSCALE_DNS_RESOLVER}" -p udp --dport 53 -j RETURN
+  backend_iptables_add_rule_checked mangle "${BOX_CHAIN_DNS_MANGLE}" -d "${BOX_TAILSCALE_DNS_RESOLVER}" -p tcp --dport 53 -j RETURN
+  backend_iptables_add_rule_checked nat "${BOX_CHAIN_DNS_NAT}" -d "${BOX_TAILSCALE_DNS_RESOLVER}" -p udp --dport 53 -j RETURN
+  backend_iptables_add_rule_checked nat "${BOX_CHAIN_DNS_NAT}" -d "${BOX_TAILSCALE_DNS_RESOLVER}" -p tcp --dport 53 -j RETURN
 
   # IPv6 tailnet bypass is handled by not touching ip6tables in this backend.
   # TODO(phase-3): add dedicated ip6tables/nft backend for explicit v6 chain rules.
@@ -266,7 +313,7 @@ backend_iptables_apply_tailscale_bypass() {
 
 backend_iptables_apply_policy_placeholders() {
   # TODO(phase-3): UID/GID/interface/MAC policy graph.
-  iptables_add_if_missing mangle "${BOX_CHAIN_MANGLE}" -m comment --comment "BOX_POLICY_PLACEHOLDER" -j RETURN
+  backend_iptables_add_rule_checked mangle "${BOX_CHAIN_MANGLE}" -m comment --comment "BOX_POLICY_PLACEHOLDER" -j RETURN
 }
 
 backend_iptables_ensure_policy_route() {
@@ -351,31 +398,36 @@ backend_iptables_apply_mode_rules() {
 
   case "${mode}" in
     tun)
-      iptables_add_if_missing mangle "${BOX_CHAIN_MANGLE}" -j RETURN
+      backend_iptables_add_rule_checked mangle "${BOX_CHAIN_MANGLE}" -j RETURN
       ;;
     redirect)
-      iptables_add_if_missing nat "${BOX_CHAIN_NAT}" -p tcp -j REDIRECT --to-ports "${BOX_REDIR_PORT}"
+      backend_iptables_add_rule_checked nat "${BOX_CHAIN_NAT}" -p tcp -j REDIRECT --to-ports "${BOX_REDIR_PORT}"
       ;;
     tproxy)
-      if backend_iptables_probe_tproxy; then
-        iptables_add_if_missing mangle "${BOX_CHAIN_MANGLE}" -p tcp -j TPROXY --on-port "${BOX_TPROXY_PORT}" --tproxy-mark "${BOX_FWMARK}"
-        iptables_add_if_missing mangle "${BOX_CHAIN_MANGLE}" -p udp -j TPROXY --on-port "${BOX_TPROXY_PORT}" --tproxy-mark "${BOX_FWMARK}"
+      if backend_iptables_probe_tproxy \
+        && iptables_try_add_if_missing_quiet mangle "${BOX_CHAIN_MANGLE}" -p tcp -j TPROXY --on-port "${BOX_TPROXY_PORT}" --tproxy-mark "${BOX_FWMARK}" \
+        && iptables_try_add_if_missing_quiet mangle "${BOX_CHAIN_MANGLE}" -p udp -j TPROXY --on-port "${BOX_TPROXY_PORT}" --tproxy-mark "${BOX_FWMARK}"; then
+        :
       else
+        iptables_delete_all mangle "${BOX_CHAIN_MANGLE}" -p tcp -j TPROXY --on-port "${BOX_TPROXY_PORT}" --tproxy-mark "${BOX_FWMARK}"
+        iptables_delete_all mangle "${BOX_CHAIN_MANGLE}" -p udp -j TPROXY --on-port "${BOX_TPROXY_PORT}" --tproxy-mark "${BOX_FWMARK}"
         log "WARN" "firewall" "FW_TPROXY_DOWNGRADE" "TPROXY unavailable; using MARK fallback"
-        iptables_add_if_missing mangle "${BOX_CHAIN_MANGLE}" -p tcp -j MARK --set-xmark "${BOX_FWMARK}"
-        iptables_add_if_missing mangle "${BOX_CHAIN_MANGLE}" -p udp -j MARK --set-xmark "${BOX_FWMARK}"
+        backend_iptables_add_rule_checked mangle "${BOX_CHAIN_MANGLE}" -p tcp -j MARK --set-xmark "${BOX_FWMARK}"
+        backend_iptables_add_rule_checked mangle "${BOX_CHAIN_MANGLE}" -p udp -j MARK --set-xmark "${BOX_FWMARK}"
       fi
       if ! backend_iptables_ensure_policy_route; then
         return "${E_FIREWALL_APPLY}"
       fi
       ;;
     mixed|enhance)
-      iptables_add_if_missing nat "${BOX_CHAIN_NAT}" -p tcp -j REDIRECT --to-ports "${BOX_REDIR_PORT}"
-      if backend_iptables_probe_tproxy; then
-        iptables_add_if_missing mangle "${BOX_CHAIN_MANGLE}" -p udp -j TPROXY --on-port "${BOX_TPROXY_PORT}" --tproxy-mark "${BOX_FWMARK}"
+      backend_iptables_add_rule_checked nat "${BOX_CHAIN_NAT}" -p tcp -j REDIRECT --to-ports "${BOX_REDIR_PORT}"
+      if backend_iptables_probe_tproxy \
+        && iptables_try_add_if_missing_quiet mangle "${BOX_CHAIN_MANGLE}" -p udp -j TPROXY --on-port "${BOX_TPROXY_PORT}" --tproxy-mark "${BOX_FWMARK}"; then
+        :
       else
+        iptables_delete_all mangle "${BOX_CHAIN_MANGLE}" -p udp -j TPROXY --on-port "${BOX_TPROXY_PORT}" --tproxy-mark "${BOX_FWMARK}"
         log "WARN" "firewall" "FW_TPROXY_DOWNGRADE" "TPROXY unavailable for UDP; using MARK fallback"
-        iptables_add_if_missing mangle "${BOX_CHAIN_MANGLE}" -p udp -j MARK --set-xmark "${BOX_FWMARK}"
+        backend_iptables_add_rule_checked mangle "${BOX_CHAIN_MANGLE}" -p udp -j MARK --set-xmark "${BOX_FWMARK}"
       fi
       if ! backend_iptables_ensure_policy_route; then
         return "${E_FIREWALL_APPLY}"
@@ -395,24 +447,26 @@ backend_iptables_apply_dns_strategy() {
 
   case "${dns_mode}" in
     disable)
-      iptables_add_if_missing mangle "${BOX_CHAIN_DNS_MANGLE}" -j RETURN
-      iptables_add_if_missing nat "${BOX_CHAIN_DNS_NAT}" -j RETURN
+      backend_iptables_add_rule_checked mangle "${BOX_CHAIN_DNS_MANGLE}" -j RETURN
+      backend_iptables_add_rule_checked nat "${BOX_CHAIN_DNS_NAT}" -j RETURN
       ;;
     redirect)
-      iptables_add_if_missing nat "${BOX_CHAIN_DNS_NAT}" -p udp --dport 53 -j REDIRECT --to-ports "${BOX_DNS_PORT}"
-      iptables_add_if_missing nat "${BOX_CHAIN_DNS_NAT}" -p tcp --dport 53 -j REDIRECT --to-ports "${BOX_DNS_PORT}"
+      backend_iptables_add_rule_checked nat "${BOX_CHAIN_DNS_NAT}" -p udp --dport 53 -j REDIRECT --to-ports "${BOX_DNS_PORT}"
+      backend_iptables_add_rule_checked nat "${BOX_CHAIN_DNS_NAT}" -p tcp --dport 53 -j REDIRECT --to-ports "${BOX_DNS_PORT}"
       ;;
     tproxy)
-      if backend_iptables_probe_tproxy; then
-        iptables_add_if_missing mangle "${BOX_CHAIN_DNS_MANGLE}" -p udp --dport 53 -j TPROXY --on-port "${BOX_DNS_PORT}" --tproxy-mark "${BOX_FWMARK}"
-        iptables_add_if_missing mangle "${BOX_CHAIN_DNS_MANGLE}" -p tcp --dport 53 -j TPROXY --on-port "${BOX_DNS_PORT}" --tproxy-mark "${BOX_FWMARK}"
+      if backend_iptables_probe_tproxy \
+        && iptables_try_add_if_missing_quiet mangle "${BOX_CHAIN_DNS_MANGLE}" -p udp --dport 53 -j TPROXY --on-port "${BOX_DNS_PORT}" --tproxy-mark "${BOX_FWMARK}" \
+        && iptables_try_add_if_missing_quiet mangle "${BOX_CHAIN_DNS_MANGLE}" -p tcp --dport 53 -j TPROXY --on-port "${BOX_DNS_PORT}" --tproxy-mark "${BOX_FWMARK}"; then
         if ! backend_iptables_ensure_policy_route; then
           return "${E_FIREWALL_APPLY}"
         fi
       else
+        iptables_delete_all mangle "${BOX_CHAIN_DNS_MANGLE}" -p udp --dport 53 -j TPROXY --on-port "${BOX_DNS_PORT}" --tproxy-mark "${BOX_FWMARK}"
+        iptables_delete_all mangle "${BOX_CHAIN_DNS_MANGLE}" -p tcp --dport 53 -j TPROXY --on-port "${BOX_DNS_PORT}" --tproxy-mark "${BOX_FWMARK}"
         log "WARN" "firewall" "FW_DNS_TPROXY_DOWNGRADE" "DNS tproxy unavailable; redirecting DNS instead"
-        iptables_add_if_missing nat "${BOX_CHAIN_DNS_NAT}" -p udp --dport 53 -j REDIRECT --to-ports "${BOX_DNS_PORT}"
-        iptables_add_if_missing nat "${BOX_CHAIN_DNS_NAT}" -p tcp --dport 53 -j REDIRECT --to-ports "${BOX_DNS_PORT}"
+        backend_iptables_add_rule_checked nat "${BOX_CHAIN_DNS_NAT}" -p udp --dport 53 -j REDIRECT --to-ports "${BOX_DNS_PORT}"
+        backend_iptables_add_rule_checked nat "${BOX_CHAIN_DNS_NAT}" -p tcp --dport 53 -j REDIRECT --to-ports "${BOX_DNS_PORT}"
       fi
       ;;
     *)
@@ -425,18 +479,18 @@ backend_iptables_apply_dns_strategy() {
 }
 
 backend_iptables_create_base() {
-  iptables_ensure_chain mangle "${BOX_CHAIN_MANGLE}"
-  iptables_ensure_chain nat "${BOX_CHAIN_NAT}"
-  iptables_ensure_chain mangle "${BOX_CHAIN_DNS_MANGLE}"
-  iptables_ensure_chain nat "${BOX_CHAIN_DNS_NAT}"
+  backend_iptables_ensure_chain_checked mangle "${BOX_CHAIN_MANGLE}"
+  backend_iptables_ensure_chain_checked nat "${BOX_CHAIN_NAT}"
+  backend_iptables_ensure_chain_checked mangle "${BOX_CHAIN_DNS_MANGLE}"
+  backend_iptables_ensure_chain_checked nat "${BOX_CHAIN_DNS_NAT}"
 
-  iptables_add_if_missing mangle PREROUTING -j "${BOX_CHAIN_MANGLE}"
-  iptables_add_if_missing mangle OUTPUT -j "${BOX_CHAIN_MANGLE}"
-  iptables_add_if_missing nat PREROUTING -j "${BOX_CHAIN_NAT}"
-  iptables_add_if_missing nat OUTPUT -j "${BOX_CHAIN_NAT}"
+  backend_iptables_add_rule_checked mangle PREROUTING -j "${BOX_CHAIN_MANGLE}"
+  backend_iptables_add_rule_checked mangle OUTPUT -j "${BOX_CHAIN_MANGLE}"
+  backend_iptables_add_rule_checked nat PREROUTING -j "${BOX_CHAIN_NAT}"
+  backend_iptables_add_rule_checked nat OUTPUT -j "${BOX_CHAIN_NAT}"
 
-  iptables_add_if_missing mangle "${BOX_CHAIN_MANGLE}" -j "${BOX_CHAIN_DNS_MANGLE}"
-  iptables_add_if_missing nat "${BOX_CHAIN_NAT}" -j "${BOX_CHAIN_DNS_NAT}"
+  backend_iptables_add_rule_checked mangle "${BOX_CHAIN_MANGLE}" -j "${BOX_CHAIN_DNS_MANGLE}"
+  backend_iptables_add_rule_checked nat "${BOX_CHAIN_NAT}" -j "${BOX_CHAIN_DNS_NAT}"
 }
 
 backend_iptables_apply_mode() {
