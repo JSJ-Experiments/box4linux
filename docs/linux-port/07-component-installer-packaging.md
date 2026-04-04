@@ -37,13 +37,13 @@ Helper script:
 - Installed to `/usr/share/doc/box4linux/systemd-lifecycle.sh`
 
 Safe operations:
-- `enable`: daemon-reload, enable units, start service
-- `disable`: stop/disable units, daemon-reload
-- `restart`: restart units without touching config/data
+- `enable`: daemon-reload, enable `box.service`, `box-firewall.service`, and `box-policy.service`, then start service
+- `disable`: stop/disable service, firewall, policy, and shipped updater units/timers, then daemon-reload
+- `restart`: restart service/policy units without touching config/data
 
 Pacman hook behavior (`box4linux.install`):
 - `post_install`/`post_upgrade`: daemon-reload, operator guidance
-- `pre_remove`: best-effort `boxctl firewall disable`, `boxctl service stop`, disable units
+- `pre_remove`: best-effort `boxctl policy disable`, `boxctl firewall disable`, `boxctl service stop`, disable all shipped units/timers
 - `post_remove`: leave config/data unless manually purged
 
 ## CI/Release Automation

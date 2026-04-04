@@ -12,6 +12,8 @@ optdepends=(
   'nftables: nftables backend support'
   'mihomo: mihomo core runtime'
   'sing-box: sing-box core runtime'
+  'iw: Wi-Fi link details for policy watcher fallback'
+  'networkmanager: nmcli integration for policy watcher SSID/BSSID detection'
   'systemd: unit lifecycle management'
 )
 backup=('etc/box/box.toml')

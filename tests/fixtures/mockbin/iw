@@ -1,0 +1,8 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+if [[ -n "${MOCK_IW_LINK_FILE:-}" && -f "${MOCK_IW_LINK_FILE}" ]]; then
+  cat "${MOCK_IW_LINK_FILE}"
+fi
+

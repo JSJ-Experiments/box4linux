@@ -16,12 +16,25 @@ post_upgrade() {
 
 pre_remove() {
   if command -v /usr/bin/boxctl >/dev/null 2>&1; then
+    /usr/bin/boxctl policy disable >/dev/null 2>&1 || true
     /usr/bin/boxctl firewall disable >/dev/null 2>&1 || true
     /usr/bin/boxctl service stop >/dev/null 2>&1 || true
   fi
   if command -v systemctl >/dev/null 2>&1; then
-    systemctl disable --now box-firewall.service >/dev/null 2>&1 || true
-    systemctl disable --now box.service >/dev/null 2>&1 || true
+    systemctl disable --now \
+      box-policy.service \
+      box-firewall.service \
+      box.service \
+      box-update-kernel.timer \
+      box-update-subs.timer \
+      box-update-geo.timer \
+      box-update-dashboard.timer \
+      box-update-all.timer \
+      box-update-kernel.service \
+      box-update-subs.service \
+      box-update-geo.service \
+      box-update-dashboard.service \
+      box-update-all.service >/dev/null 2>&1 || true
     systemctl daemon-reload >/dev/null 2>&1 || true
   fi
 }

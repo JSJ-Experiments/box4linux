@@ -6,9 +6,17 @@ STATE_FILE="${MOCK_IP_STATE:?MOCK_IP_STATE is required}"
 mkdir -p "$(dirname "${STATE_FILE}")"
 touch "${STATE_FILE}"
 
+opt_brief="false"
 cmd="${1:-}"
-subcmd="${2:-}"
-shift 2 || true
+if [[ "${cmd}" == "-o" ]]; then
+  opt_brief="true"
+  cmd="${2:-}"
+  subcmd="${3:-}"
+  shift 3 || true
+else
+  subcmd="${2:-}"
+  shift 2 || true
+fi
 
 extract_table_arg() {
   local prev=""
@@ -24,6 +32,30 @@ extract_table_arg() {
 }
 
 case "${cmd}:${subcmd}" in
+  link:show)
+    if [[ "${opt_brief}" == "true" && "${1:-}" == "up" && -n "${MOCK_IP_LINKS_FILE:-}" && -f "${MOCK_IP_LINKS_FILE}" ]]; then
+      cat "${MOCK_IP_LINKS_FILE}"
+    fi
+    ;;
+  addr:show)
+    if [[ "${opt_brief}" == "true" && -n "${MOCK_IP_ADDRS_FILE:-}" && -f "${MOCK_IP_ADDRS_FILE}" ]]; then
+      cat "${MOCK_IP_ADDRS_FILE}"
+    fi
+    ;;
+  monitor:link|monitor:route|monitor:address)
+    if [[ -n "${MOCK_IP_MONITOR_FILE:-}" ]]; then
+      mkdir -p "$(dirname "${MOCK_IP_MONITOR_FILE}")"
+      touch "${MOCK_IP_MONITOR_FILE}"
+      tail -n 0 -F "${MOCK_IP_MONITOR_FILE}"
+    fi
+    ;;
+  monitor:*)
+    if [[ -n "${MOCK_IP_MONITOR_FILE:-}" ]]; then
+      mkdir -p "$(dirname "${MOCK_IP_MONITOR_FILE}")"
+      touch "${MOCK_IP_MONITOR_FILE}"
+      tail -n 0 -F "${MOCK_IP_MONITOR_FILE}"
+    fi
+    ;;
   rule:list)
     grep -F "RULE|" "${STATE_FILE}" | sed 's/^RULE|//' || true
     ;;

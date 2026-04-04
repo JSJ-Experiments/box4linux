@@ -5,6 +5,8 @@
 set -euo pipefail
 
 CMD_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+BOXCTL_SELF_PATH="$(cd "${CMD_DIR}" && pwd)/$(basename "${BASH_SOURCE[0]}")"
+export BOXCTL_SELF_PATH
 LIB_DIR_CANDIDATES=(
   "${BOX_LIB_DIR:-}"
   "${CMD_DIR}/../lib"
@@ -37,13 +39,15 @@ source "${LIB_DIR}/config.sh"
 source "${LIB_DIR}/supervisor/supervisor.sh"
 source "${LIB_DIR}/firewall/firewall.sh"
 source "${LIB_DIR}/updater/updater.sh"
+source "${LIB_DIR}/policy/policy.sh"
 
 usage() {
   cat <<'EOF'
 Usage:
-  boxctl service <start|stop|restart|status> [--json]
+  boxctl service <start|stop|restart|reload|status> [--json]
   boxctl firewall <enable|disable|renew|status|dry-run> [--json]
   boxctl update <kernel|subs|geo|dashboard|all|status> [--json]
+  boxctl policy <evaluate|enable|disable|status> [--json]
 EOF
 }
 
@@ -71,6 +75,9 @@ main() {
       ;;
     update)
       updater_cmd "${action}"
+      ;;
+    policy)
+      policy_cmd "${action}"
       ;;
     -h|--help|help|"")
       usage

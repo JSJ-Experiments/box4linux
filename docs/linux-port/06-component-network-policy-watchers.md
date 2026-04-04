@@ -21,6 +21,16 @@ Use separate daemons or systemd path/network units:
 3. optional file-triggered control
 - if needed for manual disable marker compatibility
 
+Current Linux-native implementation:
+- `lib/policy/context.sh`
+- `lib/policy/engine.sh`
+- `lib/policy/policy.sh`
+- `systemd/box-policy.service`
+
+Implemented control surface:
+- `boxctl policy evaluate|enable|disable|status`
+- hidden `boxctl policy monitor` action for `systemd`
+
 ## Policy Engine Contract
 Input:
 - network status
@@ -57,6 +67,7 @@ Policy/watcher implications:
 - Keep lock directory semantics under `/var/run/box/locks`.
 - one active policy evaluation at a time.
 - coalesce rapid network events.
+- address-triggered firewall refresh runs as a separate background `firewall renew` worker so policy evaluation does not block on full firewall reapply.
 
 ## Baseline Defects to Correct
 - `ctr.inotify` references undefined `RUN_DIR`.
@@ -92,3 +103,24 @@ on_net_event() {
 3. fallback `unknown`
 
 If SSID data unavailable, policy should default based on `use_module_on_wifi_disconnect`.
+
+## Status Contract
+`boxctl policy status --json` includes:
+- `status`
+- `policy_enabled`
+- `watcher_running`
+- `pid`
+- `desired_state`
+- `applied_state`
+- `proxy_mode`
+- `debounce_seconds`
+- `active_ifaces`
+- `wifi_connected`
+- `ssid`
+- `bssid`
+- `disable_marker_present`
+- `last_reason`
+- `last_error`
+- `last_event`
+- `last_event_ts`
+- `last_refresh_ts`
