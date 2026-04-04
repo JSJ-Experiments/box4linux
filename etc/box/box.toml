@@ -23,3 +23,40 @@ backend = "iptables"
 route_table = 2024
 route_pref = 100
 fwmark = "16777216/16777216"
+
+[updater]
+artifact_dir = "/var/lib/box/artifacts"
+staging_dir = "/var/lib/box/staging"
+checksum_policy = "optional"
+kernel_interval = "daily"
+subs_interval = "hourly"
+geo_interval = "daily"
+dashboard_interval = "weekly"
+
+[updater.kernel]
+url = ""
+file = ""
+checksum = ""
+checksum_file = ""
+target = ""
+
+[updater.subs]
+url = ""
+file = ""
+checksum = ""
+checksum_file = ""
+target = ""
+
+[updater.geo]
+url = ""
+file = ""
+checksum = ""
+checksum_file = ""
+target = ""
+
+[updater.dashboard]
+url = ""
+file = ""
+checksum = ""
+checksum_file = ""
+target = ""

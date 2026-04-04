@@ -1,0 +1,11 @@
+[Unit]
+Description=Schedule Box Subscription Updates
+
+[Timer]
+OnBootSec=5m
+OnUnitActiveSec=1h
+Persistent=true
+Unit=box-update-subs.service
+
+[Install]
+WantedBy=timers.target

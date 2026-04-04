@@ -1,0 +1,9 @@
+[Unit]
+Description=Box Dashboard Updater
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/boxctl update dashboard
+TimeoutStartSec=180

@@ -1,0 +1,11 @@
+[Unit]
+Description=Schedule Combined Box Updates
+
+[Timer]
+OnBootSec=30m
+OnUnitActiveSec=12h
+Persistent=true
+Unit=box-update-all.service
+
+[Install]
+WantedBy=timers.target

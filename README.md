@@ -6,6 +6,7 @@ Linux-native control plane lives in:
 - `lib/config.sh`
 - `lib/supervisor/`
 - `lib/firewall/`
+- `lib/updater/`
 - `systemd/`
 - `tests/integration/`
 - `packaging/arch/`
@@ -21,14 +22,59 @@ Android reference artifacts are kept untouched in `box-reference/`.
    - `./cmd/boxctl service status --json`
    - `./cmd/boxctl firewall status`
    - `./cmd/boxctl firewall status --json`
+   - `./cmd/boxctl update status`
+   - `./cmd/boxctl update status --json`
 3. Run privileged actions as root:
    - `sudo ./cmd/boxctl service start|stop|restart`
    - `sudo ./cmd/boxctl firewall enable|disable|renew`
+   - `sudo ./cmd/boxctl update kernel|subs|geo|dashboard|all`
    - `./cmd/boxctl firewall dry-run`
 4. Run integration checks:
    - `./tests/integration/test_phase2.sh`
+   - `./tests/integration/test_updater.sh`
    - `sudo ./tests/integration/test_real_kernel.sh`
    - `./tests/integration/test_docker_privileged.sh`
+
+## Updater
+
+Commands:
+- `boxctl update kernel`
+- `boxctl update subs`
+- `boxctl update geo`
+- `boxctl update dashboard`
+- `boxctl update all`
+- `boxctl update status --json`
+
+Update sources are configured in `/etc/box/box.toml` under:
+- `[updater]`
+- `[updater.kernel]`
+- `[updater.subs]`
+- `[updater.geo]`
+- `[updater.dashboard]`
+
+Supported inputs:
+- `url`
+- `file`
+- `checksum`
+- `checksum_file`
+- `target`
+
+Failure semantics:
+- downloads go to staging first
+- checksum verification follows `checksum_policy = off|optional|required`
+- staged payload is validated before install
+- install writes target atomically with backup/restore on handoff failure
+- runtime handoff prefers reload when supported, otherwise controlled restart
+- current `mihomo` and `sing-box` updater handoff uses controlled restart; API reload hooks remain TODO
+
+Timer units shipped in `systemd/`:
+- `box-update-kernel.service` + `.timer`
+- `box-update-subs.service` + `.timer`
+- `box-update-geo.service` + `.timer`
+- `box-update-dashboard.service` + `.timer`
+- `box-update-all.service` + `.timer`
+
+Enable only the timers you actually want. Do not enable both the per-component timers and `box-update-all.timer` unless duplicate update attempts are acceptable in your environment.
 
 ## Docker Test Harness
 
@@ -58,6 +104,8 @@ Installed layout:
 - `/etc/box/box.toml`
 - `/usr/lib/systemd/system/box.service`
 - `/usr/lib/systemd/system/box-firewall.service`
+- `/usr/lib/systemd/system/box-update-*.service`
+- `/usr/lib/systemd/system/box-update-*.timer`
 - `/usr/share/doc/box4linux/`
 
 Config upgrade behavior:
@@ -88,6 +136,9 @@ Manual equivalent:
    - `sudo systemctl start box.service`
 4. Renew firewall policy safely:
    - `sudo systemctl reload box-firewall.service`
+5. Run or schedule updates:
+   - `sudo systemctl start box-update-all.service`
+   - `sudo systemctl enable --now box-update-subs.timer`
 
 ## CI/Release Flow
 
@@ -107,6 +158,7 @@ On tags (`v*`):
 
 - Supported cores: `mihomo`, `sing-box`
 - Runtime overlays rendered under `/run/box/rendered` (or dev fallback)
+- Updater components: `kernel`, `subs`, `geo`, `dashboard`
 - Firewall backends:
   - `iptables` (mature path)
   - `nftables` (MVP parity)

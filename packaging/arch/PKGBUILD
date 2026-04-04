@@ -31,8 +31,10 @@ package() {
 
   install -Dm644 "${repo_root}/etc/box/box.toml" "${pkgdir}/etc/box/box.toml"
 
-  install -Dm644 "${repo_root}/systemd/box.service" "${pkgdir}/usr/lib/systemd/system/box.service"
-  install -Dm644 "${repo_root}/systemd/box-firewall.service" "${pkgdir}/usr/lib/systemd/system/box-firewall.service"
+  local unit
+  for unit in "${repo_root}"/systemd/*; do
+    install -Dm644 "${unit}" "${pkgdir}/usr/lib/systemd/system/$(basename "${unit}")"
+  done
 
   install -Dm644 "${repo_root}/README.md" "${pkgdir}/usr/share/doc/${pkgname}/README.md"
   install -d "${pkgdir}/usr/share/doc/${pkgname}/linux-port"

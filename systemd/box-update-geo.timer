@@ -1,0 +1,11 @@
+[Unit]
+Description=Schedule Box Geo Data Updates
+
+[Timer]
+OnBootSec=15m
+OnUnitActiveSec=1d
+Persistent=true
+Unit=box-update-geo.service
+
+[Install]
+WantedBy=timers.target

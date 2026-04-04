@@ -1,0 +1,11 @@
+[Unit]
+Description=Schedule Box Kernel Updates
+
+[Timer]
+OnBootSec=10m
+OnUnitActiveSec=1d
+Persistent=true
+Unit=box-update-kernel.service
+
+[Install]
+WantedBy=timers.target
