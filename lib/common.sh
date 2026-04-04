@@ -29,6 +29,7 @@ E_CONFIG=10
 E_CORE_START=20
 E_FIREWALL_APPLY=30
 E_POLICY=40
+E_UPDATE=50
 
 resolve_runtime_path() {
   local preferred="$1"

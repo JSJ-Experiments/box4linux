@@ -1,0 +1,11 @@
+[Unit]
+Description=Schedule Box Dashboard Updates
+
+[Timer]
+OnBootSec=20m
+OnUnitActiveSec=7d
+Persistent=true
+Unit=box-update-dashboard.service
+
+[Install]
+WantedBy=timers.target

@@ -1,0 +1,9 @@
+[Unit]
+Description=Box Combined Updater
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/boxctl update all
+TimeoutStartSec=600

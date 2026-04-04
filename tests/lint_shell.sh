@@ -11,10 +11,13 @@ shell_files=(
   "lib/*.sh"
   "lib/firewall/*.sh"
   "lib/supervisor/*.sh"
+  "lib/updater/*.sh"
   "tests/integration/test_phase2.sh"
+  "tests/integration/test_updater.sh"
   "tests/integration/test_real_kernel.sh"
   "tests/integration/test_arch_package_smoke.sh"
   "tests/integration/test_docker_privileged.sh"
+  "tests/fixtures/mockbin/curl"
   "tests/fixtures/mockbin/ip"
   "tests/fixtures/mockbin/iptables"
   "packaging/scripts/systemd-lifecycle.sh"
@@ -37,10 +40,13 @@ run_shellcheck() {
     lib/*.sh \
     lib/firewall/*.sh \
     lib/supervisor/*.sh \
+    lib/updater/*.sh \
     tests/integration/test_phase2.sh \
+    tests/integration/test_updater.sh \
     tests/integration/test_real_kernel.sh \
     tests/integration/test_arch_package_smoke.sh \
     tests/integration/test_docker_privileged.sh \
+    tests/fixtures/mockbin/curl \
     packaging/scripts/systemd-lifecycle.sh
   shellcheck -e SC1091,SC2034 -s sh packaging/arch/box4linux.install
 }

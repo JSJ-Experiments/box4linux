@@ -36,6 +36,11 @@ adapter_sing_box_start() {
 }
 
 adapter_sing_box_reload() {
-  # TODO(phase-2): call sing-box API reload endpoint when available.
-  return 0
+  local msg="sing-box reload is not implemented yet; restart is required"
+  if declare -F log >/dev/null 2>&1; then
+    log "WARN" "service" "SING_BOX_RELOAD_UNIMPLEMENTED" "${msg}"
+  else
+    printf 'WARN: %s\n' "${msg}" >&2
+  fi
+  return 1
 }
