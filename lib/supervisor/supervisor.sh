@@ -229,11 +229,11 @@ service_stop_locked() {
 
   local pid_file pid rendered_path
   pid_file="$(service_pid_file)"
+  rendered_path="$(rendered_config_path)"
   pid="$(read_pid_file "${pid_file}" || true)"
   if ! is_pid_alive "${pid}"; then
     pid="$(discover_core_pid "${rendered_path}" "${BOX_CORE_WORKDIR}" || true)"
   fi
-  rendered_path="$(rendered_config_path)"
 
   firewall_disable || true
 
