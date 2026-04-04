@@ -25,15 +25,15 @@ USAGE
 enable_units() {
   require_systemctl
   systemctl daemon-reload
-  systemctl enable box.service box-firewall.service
+  systemctl enable box.service box-firewall.service box-policy.service
   systemctl start box.service
   systemctl reload-or-restart box-firewall.service || true
 }
 
 disable_units() {
   require_systemctl
-  systemctl stop box-firewall.service box.service || true
-  systemctl disable box-firewall.service box.service || true
+  systemctl stop box-policy.service box-firewall.service box.service || true
+  systemctl disable box-policy.service box-firewall.service box.service || true
   systemctl daemon-reload
 }
 
@@ -41,12 +41,13 @@ restart_units() {
   require_systemctl
   systemctl daemon-reload
   systemctl restart box.service
+  systemctl restart box-policy.service || true
   systemctl reload-or-restart box-firewall.service || true
 }
 
 status_units() {
   require_systemctl
-  systemctl --no-pager --full status box.service box-firewall.service || true
+  systemctl --no-pager --full status box.service box-firewall.service box-policy.service || true
 }
 
 case "${action}" in

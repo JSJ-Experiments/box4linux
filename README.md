@@ -22,15 +22,19 @@ Android reference artifacts are kept untouched in `box-reference/`.
    - `./cmd/boxctl service status --json`
    - `./cmd/boxctl firewall status`
    - `./cmd/boxctl firewall status --json`
+   - `./cmd/boxctl policy status`
+   - `./cmd/boxctl policy status --json`
    - `./cmd/boxctl update status`
    - `./cmd/boxctl update status --json`
 3. Run privileged actions as root:
-   - `sudo ./cmd/boxctl service start|stop|restart`
+   - `sudo ./cmd/boxctl service start|stop|restart|reload`
    - `sudo ./cmd/boxctl firewall enable|disable|renew`
+   - `sudo ./cmd/boxctl policy evaluate|enable|disable`
    - `sudo ./cmd/boxctl update kernel|subs|geo|dashboard|all`
    - `./cmd/boxctl firewall dry-run`
 4. Run integration checks:
    - `./tests/integration/test_phase2.sh`
+   - `./tests/integration/test_policy.sh`
    - `./tests/integration/test_updater.sh`
    - `sudo ./tests/integration/test_real_kernel.sh`
    - `./tests/integration/test_docker_privileged.sh`
@@ -97,6 +101,31 @@ Timer units shipped in `systemd/`:
 
 Enable only the timers you actually want. Do not enable both the per-component timers and `box-update-all.timer` unless duplicate update attempts are acceptable in your environment.
 
+## Policy Watcher
+
+Commands:
+- `boxctl policy evaluate`
+- `boxctl policy enable`
+- `boxctl policy disable`
+- `boxctl policy status --json`
+
+Config is under `[policy]` in `/etc/box/box.toml`:
+- `enabled = true|false`
+- `proxy_mode = core|whitelist|blacklist`
+- `debounce_seconds`
+- `use_module_on_wifi_disconnect`
+- `disable_marker`
+- `allow_ifaces`, `ignore_ifaces`
+- `allow_ssids`, `ignore_ssids`
+- `allow_bssids`, `ignore_bssids`
+
+Behavior:
+- policy watcher uses `ip monitor link route address` for Linux-native event intake
+- active Wi-Fi identity prefers `nmcli`, then falls back to `iw`
+- `wlan+`-style patterns are treated as prefix wildcards
+- address-change refresh is decoupled from policy evaluation and triggers a background `firewall renew`
+- `box-policy.service` is optional and is pulled in by `box.service`
+
 ## Docker Test Harness
 
 - Local docker-backed privileged validation:
@@ -125,6 +154,7 @@ Installed layout:
 - `/etc/box/box.toml`
 - `/usr/lib/systemd/system/box.service`
 - `/usr/lib/systemd/system/box-firewall.service`
+- `/usr/lib/systemd/system/box-policy.service`
 - `/usr/lib/systemd/system/box-update-*.service`
 - `/usr/lib/systemd/system/box-update-*.timer`
 - `/usr/share/doc/box4linux/`
@@ -143,8 +173,8 @@ Use helper script from package docs:
 
 Manual equivalent:
 - `sudo systemctl daemon-reload`
-- `sudo systemctl enable --now box.service box-firewall.service`
-- `sudo systemctl disable --now box-firewall.service box.service`
+- `sudo systemctl enable --now box.service box-firewall.service box-policy.service`
+- `sudo systemctl disable --now box-policy.service box-firewall.service box.service`
 
 ## Packaged Operational Quickstart
 
@@ -180,6 +210,7 @@ On tags (`v*`):
 - Supported cores: `mihomo`, `sing-box`
 - Runtime overlays rendered under `/run/box/rendered` (or dev fallback)
 - Updater components: `kernel`, `subs`, `geo`, `dashboard`
+- Policy watcher commands: `evaluate`, `enable`, `disable`, `status`
 - `kernel` and `geo` can resolve release assets by channel/tag/arch when explicitly configured with `source = "release"`
 - Firewall backends:
   - `iptables` (mature path)
@@ -193,6 +224,7 @@ On tags (`v*`):
 - Idempotent + lock-protected: `enable|renew|disable`
 - `BOX_TRACE_COMMANDS=1` logs external command executions with component/action context
 - `boxctl firewall status --json` exposes stable diagnostics (backend, capabilities, coexist fields, errors)
+- `boxctl policy status --json` exposes watcher/runtime intent, active interfaces, Wi-Fi identity, and last refresh metadata
 
 ## Backend Capability Notes
 

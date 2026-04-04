@@ -69,6 +69,7 @@ assert_file "${TMP_ROOT}/usr/lib/box4linux/lib/updater/updater.sh"
 assert_file "${TMP_ROOT}/etc/box/box.toml"
 assert_file "${TMP_ROOT}/usr/lib/systemd/system/box.service"
 assert_file "${TMP_ROOT}/usr/lib/systemd/system/box-firewall.service"
+assert_file "${TMP_ROOT}/usr/lib/systemd/system/box-policy.service"
 assert_file "${TMP_ROOT}/usr/lib/systemd/system/box-update-all.service"
 assert_file "${TMP_ROOT}/usr/lib/systemd/system/box-update-all.timer"
 
@@ -118,6 +119,7 @@ printf 'smoke-geo\n' >"${TMP_ROOT}/tmp/geo.dat"
 
 service_json="$(run_installed_boxctl service status --json)"
 firewall_json="$(run_installed_boxctl firewall status --json)"
+policy_json="$(run_installed_boxctl policy status --json)"
 update_json="$(run_installed_boxctl update status --json)"
 run_installed_boxctl update geo >/dev/null
 dry_run_output="$(run_installed_boxctl firewall dry-run)"
@@ -128,6 +130,10 @@ if [[ "${service_json}" != *'"status"'* ]]; then
 fi
 if [[ "${firewall_json}" != *'"backend"'* ]]; then
   printf 'firewall status json missing backend field: %s\n' "${firewall_json}" >&2
+  exit 1
+fi
+if [[ "${policy_json}" != *'"policy_enabled"'* ]]; then
+  printf 'policy status json missing policy_enabled field: %s\n' "${policy_json}" >&2
   exit 1
 fi
 if [[ "${update_json}" != *'"components"'* ]]; then
@@ -166,12 +172,14 @@ UNIT
     systemd-analyze --root="${TMP_ROOT}" verify \
       "${TMP_ROOT}/usr/lib/systemd/system/box.service" \
       "${TMP_ROOT}/usr/lib/systemd/system/box-firewall.service" \
+      "${TMP_ROOT}/usr/lib/systemd/system/box-policy.service" \
       "${TMP_ROOT}/usr/lib/systemd/system/box-update-all.service" \
       "${TMP_ROOT}/usr/lib/systemd/system/box-update-all.timer" >/dev/null
   else
     systemd-analyze verify \
       "${TMP_ROOT}/usr/lib/systemd/system/box.service" \
       "${TMP_ROOT}/usr/lib/systemd/system/box-firewall.service" \
+      "${TMP_ROOT}/usr/lib/systemd/system/box-policy.service" \
       "${TMP_ROOT}/usr/lib/systemd/system/box-update-all.service" \
       "${TMP_ROOT}/usr/lib/systemd/system/box-update-all.timer" >/dev/null
   fi

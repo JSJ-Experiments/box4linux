@@ -32,6 +32,7 @@ jobs:
       - name: Mock integration tests
         run: |
           ./tests/integration/test_phase2.sh
+          ./tests/integration/test_policy.sh
           ./tests/integration/test_updater.sh
 
       - name: Real-kernel integration tests (skip-capable)

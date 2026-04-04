@@ -1,0 +1,19 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+args="$*"
+
+case "${args}" in
+  *"-t -f active,ssid,bssid dev wifi"*)
+    if [[ -n "${MOCK_NMCLI_WIFI_FILE:-}" && -f "${MOCK_NMCLI_WIFI_FILE}" ]]; then
+      cat "${MOCK_NMCLI_WIFI_FILE}"
+    fi
+    ;;
+  *"-t -f DEVICE,TYPE,STATE dev status"*)
+    if [[ -n "${MOCK_NMCLI_DEV_FILE:-}" && -f "${MOCK_NMCLI_DEV_FILE}" ]]; then
+      cat "${MOCK_NMCLI_DEV_FILE}"
+    fi
+    ;;
+esac
+

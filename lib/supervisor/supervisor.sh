@@ -240,6 +240,33 @@ service_restart() {
   with_lock "service" 30 service_restart_locked
 }
 
+service_reload_locked() {
+  local rc=0
+  case "${BOX_CORE}" in
+    mihomo)
+      adapter_mihomo_reload >/dev/null 2>&1 || rc=$?
+      ;;
+    sing-box)
+      adapter_sing_box_reload >/dev/null 2>&1 || rc=$?
+      ;;
+    *)
+      rc="${E_CORE_START}"
+      ;;
+  esac
+
+  if [[ "${rc}" -eq 0 ]]; then
+    log "INFO" "service" "SERVICE_RELOADED" "service reloaded core=${BOX_CORE}"
+    return 0
+  fi
+
+  log "WARN" "service" "SERVICE_RELOAD_FALLBACK" "reload unsupported or failed for core=${BOX_CORE}; restarting"
+  service_restart_locked
+}
+
+service_reload() {
+  with_lock "service" 30 service_reload_locked
+}
+
 service_print_status_text() {
   local status="${1:?missing status}"
   local pid="${2:-0}"
@@ -301,9 +328,10 @@ supervisor_cmd() {
     start) service_start ;;
     stop) service_stop ;;
     restart) service_restart ;;
+    reload) service_reload ;;
     status) service_status ;;
     *)
-      printf 'usage: boxctl service <start|stop|restart|status> [--json]\n' >&2
+      printf 'usage: boxctl service <start|stop|restart|reload|status> [--json]\n' >&2
       return 2
       ;;
   esac

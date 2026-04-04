@@ -442,6 +442,9 @@ fi
 must_run service restart >/dev/null
 service_json="$(must_run service status --json)"
 assert_contains "${service_json}" "\"status\":\"healthy\""
+must_run service reload >/dev/null
+service_json="$(must_run service status --json)"
+assert_contains "${service_json}" "\"status\":\"healthy\""
 must_run service stop >/dev/null
 assert_tailscale_state_preserved
 service_json="$(must_run service status --json)"

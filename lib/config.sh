@@ -27,6 +27,18 @@ BOX_ROUTE_TABLE=""
 BOX_ROUTE_PREF=""
 BOX_FWMARK=""
 
+BOX_POLICY_ENABLED=""
+BOX_POLICY_PROXY_MODE=""
+BOX_POLICY_DEBOUNCE_SECONDS=""
+BOX_POLICY_USE_MODULE_ON_WIFI_DISCONNECT=""
+BOX_POLICY_DISABLE_MARKER=""
+declare -a BOX_POLICY_ALLOW_IFACES=()
+declare -a BOX_POLICY_IGNORE_IFACES=()
+declare -a BOX_POLICY_ALLOW_SSIDS=()
+declare -a BOX_POLICY_IGNORE_SSIDS=()
+declare -a BOX_POLICY_ALLOW_BSSIDS=()
+declare -a BOX_POLICY_IGNORE_BSSIDS=()
+
 BOX_CORE_BIN_DIR=""
 BOX_CORE_WORKDIR=""
 BOX_CORE_CONFIG_SOURCE=""
@@ -97,6 +109,17 @@ config_defaults() {
   BOX_ROUTE_TABLE="2024"
   BOX_ROUTE_PREF="100"
   BOX_FWMARK="16777216/16777216"
+  BOX_POLICY_ENABLED="false"
+  BOX_POLICY_PROXY_MODE="core"
+  BOX_POLICY_DEBOUNCE_SECONDS="3"
+  BOX_POLICY_USE_MODULE_ON_WIFI_DISCONNECT="false"
+  BOX_POLICY_DISABLE_MARKER="${BOX_RUN_DIR}/disable"
+  BOX_POLICY_ALLOW_IFACES=()
+  BOX_POLICY_IGNORE_IFACES=()
+  BOX_POLICY_ALLOW_SSIDS=()
+  BOX_POLICY_IGNORE_SSIDS=()
+  BOX_POLICY_ALLOW_BSSIDS=()
+  BOX_POLICY_IGNORE_BSSIDS=()
   BOX_CORE_BIN_DIR="/usr/local/bin"
   BOX_CORE_WORKDIR="${BOX_VAR_DIR_DEFAULT}"
   BOX_CORE_CONFIG_SOURCE="/etc/box/profiles/config.yaml"
@@ -213,6 +236,74 @@ normalize_toml_scalar() {
   printf '%s' "${value}"
 }
 
+config_read_array() {
+  local file="${1:?missing file}"
+  local section="${2:?missing section}"
+  local key="${3:?missing key}"
+  local raw inner token
+  local -a values=()
+
+  raw="$(toml_value "${file}" "${section}" "${key}" || true)"
+  if [[ -z "${raw}" ]]; then
+    return 1
+  fi
+
+  raw="$(trim_space "$(strip_inline_comment "${raw}")")"
+  [[ "${raw}" == \[*\] ]] || return 1
+  inner="${raw#[}"
+  inner="${inner%]}"
+  inner="${inner//$'\n'/ }"
+  inner="${inner//$'\r'/ }"
+
+  while IFS= read -r token; do
+    token="$(trim_space "${token}")"
+    [[ -n "${token}" ]] || continue
+    if [[ "${token}" =~ ^\"(.*)\"$ ]]; then
+      values+=("${BASH_REMATCH[1]}")
+    elif [[ "${token}" =~ ^\'(.*)\'$ ]]; then
+      values+=("${BASH_REMATCH[1]}")
+    else
+      values+=("${token}")
+    fi
+  done < <(printf '%s\n' "${inner}" | awk '
+    BEGIN { in_quote = 0; quote = ""; token = "" }
+    {
+      line = $0
+      for (i = 1; i <= length(line); i++) {
+        ch = substr(line, i, 1)
+        if ((ch == "\"" || ch == "'\''")) {
+          if (in_quote == 0) {
+            in_quote = 1
+            quote = ch
+          } else if (quote == ch) {
+            in_quote = 0
+            quote = ""
+          }
+          token = token ch
+          continue
+        }
+        if (ch == "," && in_quote == 0) {
+          print token
+          token = ""
+          continue
+        }
+        token = token ch
+      }
+      if (in_quote == 0 && length(token) > 0) {
+        print token
+        token = ""
+      }
+    }
+    END {
+      if (length(token) > 0) {
+        print token
+      }
+    }
+  ')
+
+  printf '%s\n' "${values[@]}"
+}
+
 config_read_value() {
   local file="${1:?missing file}"
   local section="${2:?missing section}"
@@ -266,6 +357,13 @@ validate_port() {
 validate_uint() {
   local value="${1:-}"
   [[ "${value}" =~ ^[0-9]+$ ]]
+}
+
+validate_bool_string() {
+  case "${1:-}" in
+    true|false|1|0) return 0 ;;
+    *) return 1 ;;
+  esac
 }
 
 validate_config() {
@@ -353,6 +451,30 @@ validate_config() {
       ;;
   esac
 
+  if ! validate_bool_string "${BOX_POLICY_ENABLED}"; then
+    log "ERROR" "config" "E_CONFIG_POLICY_ENABLED" "policy.enabled must be true|false|1|0: ${BOX_POLICY_ENABLED}"
+    return "${E_CONFIG}"
+  fi
+
+  case "${BOX_POLICY_PROXY_MODE}" in
+    core|whitelist|blacklist) ;;
+    *)
+      log "ERROR" "config" "E_CONFIG_POLICY_MODE" "unsupported policy.proxy_mode: ${BOX_POLICY_PROXY_MODE}"
+      return "${E_CONFIG}"
+      ;;
+  esac
+
+  if ! validate_uint "${BOX_POLICY_DEBOUNCE_SECONDS}"; then
+    log "ERROR" "config" "E_CONFIG_POLICY_DEBOUNCE" "policy.debounce_seconds must be numeric: ${BOX_POLICY_DEBOUNCE_SECONDS}"
+    return "${E_CONFIG}"
+  fi
+
+  if ! validate_bool_string "${BOX_POLICY_USE_MODULE_ON_WIFI_DISCONNECT}"; then
+    log "ERROR" "config" "E_CONFIG_POLICY_DISCONNECT" \
+      "policy.use_module_on_wifi_disconnect must be true|false|1|0: ${BOX_POLICY_USE_MODULE_ON_WIFI_DISCONNECT}"
+    return "${E_CONFIG}"
+  fi
+
   case "${BOX_UPDATER_CHECKSUM_POLICY}" in
     off|optional|required) ;;
     *)
@@ -425,6 +547,7 @@ load_config() {
     export BOX_CORE BOX_NETWORK_MODE BOX_TPROXY_PORT BOX_REDIR_PORT BOX_DNS_PORT BOX_DNS_HIJACK_MODE BOX_DNS_COEXIST_MODE
     export BOX_TAILSCALE_IFACE BOX_TAILNET_IPV4_CIDR BOX_TAILNET_IPV6_CIDR BOX_TAILSCALE_DNS_RESOLVER BOX_TAILSCALE_FWMARK BOX_TAILSCALE_ROUTE_TABLE
     export BOX_FIREWALL_BACKEND BOX_ROUTE_TABLE BOX_ROUTE_PREF BOX_FWMARK
+    export BOX_POLICY_ENABLED BOX_POLICY_PROXY_MODE BOX_POLICY_DEBOUNCE_SECONDS BOX_POLICY_USE_MODULE_ON_WIFI_DISCONNECT BOX_POLICY_DISABLE_MARKER
     export BOX_CORE_BIN_DIR BOX_CORE_WORKDIR BOX_CORE_CONFIG_SOURCE
     export BOX_UPDATER_ARTIFACT_DIR BOX_UPDATER_STAGING_DIR BOX_UPDATER_CHECKSUM_POLICY
     export BOX_UPDATER_KERNEL_INTERVAL BOX_UPDATER_SUBS_INTERVAL BOX_UPDATER_GEO_INTERVAL BOX_UPDATER_DASHBOARD_INTERVAL
@@ -465,6 +588,18 @@ load_config() {
   BOX_ROUTE_TABLE="$(config_read_value "${BOX_CONFIG_FILE}" "firewall" "route_table" || printf '%s' "${BOX_ROUTE_TABLE}")"
   BOX_ROUTE_PREF="$(config_read_value "${BOX_CONFIG_FILE}" "firewall" "route_pref" || printf '%s' "${BOX_ROUTE_PREF}")"
   BOX_FWMARK="$(config_read_value "${BOX_CONFIG_FILE}" "firewall" "fwmark" || printf '%s' "${BOX_FWMARK}")"
+
+  BOX_POLICY_ENABLED="$(config_read_value "${BOX_CONFIG_FILE}" "policy" "enabled" || printf '%s' "${BOX_POLICY_ENABLED}")"
+  BOX_POLICY_PROXY_MODE="$(config_read_value "${BOX_CONFIG_FILE}" "policy" "proxy_mode" || printf '%s' "${BOX_POLICY_PROXY_MODE}")"
+  BOX_POLICY_DEBOUNCE_SECONDS="$(config_read_value "${BOX_CONFIG_FILE}" "policy" "debounce_seconds" || printf '%s' "${BOX_POLICY_DEBOUNCE_SECONDS}")"
+  BOX_POLICY_USE_MODULE_ON_WIFI_DISCONNECT="$(config_read_value "${BOX_CONFIG_FILE}" "policy" "use_module_on_wifi_disconnect" || printf '%s' "${BOX_POLICY_USE_MODULE_ON_WIFI_DISCONNECT}")"
+  BOX_POLICY_DISABLE_MARKER="$(config_read_value "${BOX_CONFIG_FILE}" "policy" "disable_marker" || printf '%s' "${BOX_POLICY_DISABLE_MARKER}")"
+  mapfile -t BOX_POLICY_ALLOW_IFACES < <(config_read_array "${BOX_CONFIG_FILE}" "policy" "allow_ifaces" || true)
+  mapfile -t BOX_POLICY_IGNORE_IFACES < <(config_read_array "${BOX_CONFIG_FILE}" "policy" "ignore_ifaces" || true)
+  mapfile -t BOX_POLICY_ALLOW_SSIDS < <(config_read_array "${BOX_CONFIG_FILE}" "policy" "allow_ssids" || true)
+  mapfile -t BOX_POLICY_IGNORE_SSIDS < <(config_read_array "${BOX_CONFIG_FILE}" "policy" "ignore_ssids" || true)
+  mapfile -t BOX_POLICY_ALLOW_BSSIDS < <(config_read_array "${BOX_CONFIG_FILE}" "policy" "allow_bssids" || true)
+  mapfile -t BOX_POLICY_IGNORE_BSSIDS < <(config_read_array "${BOX_CONFIG_FILE}" "policy" "ignore_bssids" || true)
 
   BOX_UPDATER_ARTIFACT_DIR="$(config_read_value "${BOX_CONFIG_FILE}" "updater" "artifact_dir" || printf '%s' "${BOX_UPDATER_ARTIFACT_DIR}")"
   BOX_UPDATER_STAGING_DIR="$(config_read_value "${BOX_CONFIG_FILE}" "updater" "staging_dir" || printf '%s' "${BOX_UPDATER_STAGING_DIR}")"
@@ -531,6 +666,7 @@ load_config() {
   export BOX_CORE BOX_NETWORK_MODE BOX_TPROXY_PORT BOX_REDIR_PORT BOX_DNS_PORT BOX_DNS_HIJACK_MODE BOX_DNS_COEXIST_MODE
   export BOX_TAILSCALE_IFACE BOX_TAILNET_IPV4_CIDR BOX_TAILNET_IPV6_CIDR BOX_TAILSCALE_DNS_RESOLVER BOX_TAILSCALE_FWMARK BOX_TAILSCALE_ROUTE_TABLE
   export BOX_FIREWALL_BACKEND BOX_ROUTE_TABLE BOX_ROUTE_PREF BOX_FWMARK
+  export BOX_POLICY_ENABLED BOX_POLICY_PROXY_MODE BOX_POLICY_DEBOUNCE_SECONDS BOX_POLICY_USE_MODULE_ON_WIFI_DISCONNECT BOX_POLICY_DISABLE_MARKER
   export BOX_CORE_BIN_DIR BOX_CORE_WORKDIR BOX_CORE_CONFIG_SOURCE
   export BOX_UPDATER_ARTIFACT_DIR BOX_UPDATER_STAGING_DIR BOX_UPDATER_CHECKSUM_POLICY
   export BOX_UPDATER_KERNEL_INTERVAL BOX_UPDATER_SUBS_INTERVAL BOX_UPDATER_GEO_INTERVAL BOX_UPDATER_DASHBOARD_INTERVAL

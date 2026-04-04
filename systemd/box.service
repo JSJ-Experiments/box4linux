@@ -2,12 +2,16 @@
 Description=Box Linux Core Supervisor
 After=network-online.target
 Wants=network-online.target
+Wants=box-policy.service
 
 [Service]
-Type=oneshot
-RemainAfterExit=yes
+Type=forking
+PIDFile=/run/box/box.pid
 ExecStart=/usr/bin/boxctl service start
 ExecStop=/usr/bin/boxctl service stop
+ExecReload=/usr/bin/boxctl service reload
+Restart=on-failure
+RestartSec=3
 TimeoutStartSec=120
 TimeoutStopSec=60
 

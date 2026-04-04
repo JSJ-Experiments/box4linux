@@ -24,6 +24,19 @@ route_table = 2024
 route_pref = 100
 fwmark = "16777216/16777216"
 
+[policy]
+enabled = false
+proxy_mode = "core"
+debounce_seconds = 3
+use_module_on_wifi_disconnect = false
+disable_marker = "/run/box/disable"
+allow_ifaces = []
+ignore_ifaces = []
+allow_ssids = []
+ignore_ssids = []
+allow_bssids = []
+ignore_bssids = []
+
 [updater]
 artifact_dir = "/var/lib/box/artifacts"
 staging_dir = "/var/lib/box/staging"
