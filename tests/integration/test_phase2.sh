@@ -433,7 +433,7 @@ if [[ -d "${BOX_RUN_DIR}/rendered" ]]; then
   exit 1
 fi
 
-printf '[10/11] service lifecycle + mihomo overlay\n'
+printf '[10/12] service lifecycle + mihomo overlay\n'
 write_config "mihomo" "mixed" "redirect" "${MIHOMO_SOURCE}" "preserve_tailnet" "100" "iptables"
 seed_tailscale_state
 mihomo_checksum_before="$(sha256sum "${MIHOMO_SOURCE}" | awk '{print $1}')"
@@ -447,6 +447,8 @@ assert_file_exists "${BOX_RUN_DIR}/rendered/mihomo/config.yaml"
 assert_file_contains "${BOX_RUN_DIR}/rendered/mihomo/config.yaml" 'mixed-port: 7890'
 assert_file_contains "${BOX_RUN_DIR}/rendered/mihomo/config.yaml" 'redir-port: 19797'
 assert_file_contains "${BOX_RUN_DIR}/rendered/mihomo/config.yaml" 'tproxy-port: 19898'
+assert_file_contains "${BOX_RUN_DIR}/rendered/mihomo/config.yaml" '"+.tailscale.com"'
+assert_file_contains "${BOX_RUN_DIR}/rendered/mihomo/config.yaml" '"+.ts.net"'
 mihomo_checksum_after="$(sha256sum "${MIHOMO_SOURCE}" | awk '{print $1}')"
 if [[ "${mihomo_checksum_before}" != "${mihomo_checksum_after}" ]]; then
   printf 'ASSERT SOURCE MUTATION FAILED: mihomo source config changed\n' >&2
@@ -463,7 +465,18 @@ assert_tailscale_state_preserved
 service_json="$(must_run service status --json)"
 assert_contains "${service_json}" "\"status\":\"stopped\""
 
-printf '[11/11] service lifecycle + sing-box overlay\n'
+printf '[11/12] strict_box mihomo overlay omits tailscale fake-ip filter bypass\n'
+write_config "mihomo" "mixed" "redirect" "${MIHOMO_SOURCE}" "strict_box" "100" "iptables"
+must_run service start >/dev/null
+assert_file_exists "${BOX_RUN_DIR}/rendered/mihomo/config.yaml"
+if grep -Fq '"+.tailscale.com"' "${BOX_RUN_DIR}/rendered/mihomo/config.yaml" || \
+   grep -Fq '"+.ts.net"' "${BOX_RUN_DIR}/rendered/mihomo/config.yaml"; then
+  printf 'ASSERT STRICT BOX OVERLAY FAILED: tailscale fake-ip filter bypass unexpectedly present\n' >&2
+  exit 1
+fi
+must_run service stop >/dev/null
+
+printf '[12/12] service lifecycle + sing-box overlay\n'
 write_config "sing-box" "tproxy" "tproxy" "${SING_SOURCE}" "preserve_tailnet" "100" "iptables"
 seed_tailscale_state
 sing_checksum_before="$(sha256sum "${SING_SOURCE}" | awk '{print $1}')"

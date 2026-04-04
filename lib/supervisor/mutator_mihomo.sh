@@ -26,6 +26,103 @@ yaml_set_scalar_if_missing() {
   fi
 }
 
+yaml_mihomo_ensure_dns_fake_ip_filter_item() {
+  local file="${1:?missing file}"
+  local item="${2:?missing item}"
+  local tmp_file
+  tmp_file="$(mktemp)"
+
+  awk -v item="${item}" '
+    function print_item() {
+      print "    - \"" item "\""
+    }
+
+    function normalized_list_value(line, value) {
+      value = line
+      sub(/^[[:space:]]*-[[:space:]]*/, "", value)
+      gsub(/^[[:space:]]+|[[:space:]]+$/, "", value)
+      gsub(/^"/, "", value)
+      gsub(/"$/, "", value)
+      gsub(/^'\''/, "", value)
+      gsub(/'\''$/, "", value)
+      return value
+    }
+
+    BEGIN {
+      saw_dns = 0
+      in_dns = 0
+      in_filter = 0
+      have_item = 0
+      inserted = 0
+    }
+
+    {
+      line = $0
+
+      if (line ~ /^dns:[[:space:]]*$/) {
+        saw_dns = 1
+        in_dns = 1
+        in_filter = 0
+        print line
+        next
+      }
+
+      if (in_dns && line ~ /^[^[:space:]#][^:]*:[[:space:]]*$/) {
+        if (!have_item && !inserted) {
+          if (!in_filter) {
+            print "  fake-ip-filter:"
+          }
+          print_item()
+          inserted = 1
+        }
+        in_dns = 0
+        in_filter = 0
+      }
+
+      if (in_dns && line ~ /^  fake-ip-filter:[[:space:]]*$/) {
+        in_filter = 1
+        print line
+        next
+      }
+
+      if (in_dns && in_filter) {
+        if (line ~ /^    -[[:space:]]*/) {
+          if (normalized_list_value(line) == item) {
+            have_item = 1
+          }
+          print line
+          next
+        }
+
+        if (!have_item && !inserted) {
+          print_item()
+          inserted = 1
+        }
+        in_filter = 0
+      }
+
+      print line
+    }
+
+    END {
+      if (in_dns && in_filter && !have_item && !inserted) {
+        print_item()
+        inserted = 1
+      } else if (in_dns && !have_item && !inserted) {
+        print "  fake-ip-filter:"
+        print_item()
+        inserted = 1
+      } else if (!saw_dns) {
+        print "dns:"
+        print "  fake-ip-filter:"
+        print_item()
+      }
+    }
+  ' "${file}" >"${tmp_file}"
+
+  mv "${tmp_file}" "${file}"
+}
+
 mutator_mihomo_render_overlay() {
   local source_file="${1:?missing source file}"
   local rendered_file="${2:?missing rendered file}"
@@ -50,6 +147,11 @@ EOF
   yaml_set_scalar_if_missing "${rendered_file}" "external-controller" "\"127.0.0.1:9090\""
   yaml_set_scalar_if_missing "${rendered_file}" "external-ui" "\"./dashboard\""
   yaml_set_scalar_if_missing "${rendered_file}" "external-ui-url" "\"https://github.com/Zephyruso/zashboard/releases/latest/download/dist.zip\""
+
+  if [[ "${BOX_DNS_COEXIST_MODE}" == "preserve_tailnet" ]]; then
+    yaml_mihomo_ensure_dns_fake_ip_filter_item "${rendered_file}" "+.tailscale.com"
+    yaml_mihomo_ensure_dns_fake_ip_filter_item "${rendered_file}" "+.ts.net"
+  fi
 
   {
     printf '# box overlay (runtime only)\n'
