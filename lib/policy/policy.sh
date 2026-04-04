@@ -57,7 +57,7 @@ policy_active_ifaces_json() {
   local raw item
   local -a items=()
 
-  raw="$(policy_read_state_value "active_ifaces" || true)"
+  raw="$(policy_snapshot_get "active_ifaces" "")"
   if [[ -z "${raw}" ]]; then
     printf '[]'
     return 0
@@ -119,6 +119,32 @@ policy_read_state_value() {
   state_file="$(policy_state_readonly_file)"
   [[ -f "${state_file}" ]] || return 1
   awk -F= -v wanted="${key}" '$1==wanted {print substr($0, index($0, "=")+1); exit}' "${state_file}"
+}
+
+policy_snapshot_load() {
+  local state_file line key value
+
+  declare -gA POLICY_STATUS_SNAPSHOT=()
+  state_file="$(policy_state_readonly_file)"
+  [[ -f "${state_file}" ]] || return 0
+
+  while IFS= read -r line; do
+    [[ "${line}" == *=* ]] || continue
+    key="${line%%=*}"
+    value="${line#*=}"
+    POLICY_STATUS_SNAPSHOT["${key}"]="${value}"
+  done <"${state_file}"
+}
+
+policy_snapshot_get() {
+  local key="${1:?missing key}"
+  local default_value="${2:-}"
+
+  if [[ -v "POLICY_STATUS_SNAPSHOT[${key}]" ]]; then
+    printf '%s' "${POLICY_STATUS_SNAPSHOT["${key}"]}"
+  else
+    printf '%s' "${default_value}"
+  fi
 }
 
 policy_event_source() {
@@ -313,7 +339,8 @@ policy_evaluate() {
 
 policy_status_text() {
   load_config
-  local pid_file pid watcher_running state_file
+  local pid_file pid watcher_running
+  policy_snapshot_load
 
   pid_file="$(policy_pid_file)"
   pid="$(read_pid_file "${pid_file}" || true)"
@@ -324,29 +351,30 @@ policy_status_text() {
     pid="0"
   fi
 
-  printf 'status=%s\n' "$(policy_read_state_value "status" || printf 'inactive')"
+  printf 'status=%s\n' "$(policy_snapshot_get "status" "inactive")"
   printf 'policy_enabled=%s\n' "${BOX_POLICY_ENABLED}"
   printf 'watcher_running=%s\n' "${watcher_running}"
   printf 'pid=%s\n' "${pid}"
-  printf 'desired_state=%s\n' "$(policy_read_state_value "desired_state" || printf 'disabled')"
-  printf 'applied_state=%s\n' "$(policy_read_state_value "applied_state" || printf 'unchanged')"
+  printf 'desired_state=%s\n' "$(policy_snapshot_get "desired_state" "disabled")"
+  printf 'applied_state=%s\n' "$(policy_snapshot_get "applied_state" "unchanged")"
   printf 'proxy_mode=%s\n' "${BOX_POLICY_PROXY_MODE}"
   printf 'debounce_seconds=%s\n' "${BOX_POLICY_DEBOUNCE_SECONDS}"
-  printf 'active_ifaces=%s\n' "$(policy_read_state_value "active_ifaces" || true)"
-  printf 'wifi_connected=%s\n' "$(policy_read_state_value "wifi_connected" || printf 'false')"
-  printf 'ssid=%s\n' "$(policy_read_state_value "ssid" || true)"
-  printf 'bssid=%s\n' "$(policy_read_state_value "bssid" || true)"
-  printf 'disable_marker_present=%s\n' "$(policy_read_state_value "disable_marker_present" || printf 'false')"
-  printf 'last_reason=%s\n' "$(policy_read_state_value "last_reason" || true)"
-  printf 'last_error=%s\n' "$(policy_read_state_value "last_error" || true)"
-  printf 'last_event=%s\n' "$(policy_read_state_value "last_event" || true)"
-  printf 'last_event_ts=%s\n' "$(policy_read_state_value "last_event_ts" || true)"
-  printf 'last_refresh_ts=%s\n' "$(policy_read_state_value "last_refresh_ts" || true)"
+  printf 'active_ifaces=%s\n' "$(policy_snapshot_get "active_ifaces" "")"
+  printf 'wifi_connected=%s\n' "$(policy_snapshot_get "wifi_connected" "false")"
+  printf 'ssid=%s\n' "$(policy_snapshot_get "ssid" "")"
+  printf 'bssid=%s\n' "$(policy_snapshot_get "bssid" "")"
+  printf 'disable_marker_present=%s\n' "$(policy_snapshot_get "disable_marker_present" "false")"
+  printf 'last_reason=%s\n' "$(policy_snapshot_get "last_reason" "")"
+  printf 'last_error=%s\n' "$(policy_snapshot_get "last_error" "")"
+  printf 'last_event=%s\n' "$(policy_snapshot_get "last_event" "")"
+  printf 'last_event_ts=%s\n' "$(policy_snapshot_get "last_event_ts" "")"
+  printf 'last_refresh_ts=%s\n' "$(policy_snapshot_get "last_refresh_ts" "")"
 }
 
 policy_status_json() {
   load_config
   local pid_file pid watcher_running
+  policy_snapshot_load
 
   pid_file="$(policy_pid_file)"
   pid="$(read_pid_file "${pid_file}" || true)"
@@ -358,24 +386,24 @@ policy_status_json() {
   fi
 
   printf '{%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s}\n' \
-    "$(json_pair "status" "$(policy_read_state_value "status" || printf 'inactive')")" \
+    "$(json_pair "status" "$(policy_snapshot_get "status" "inactive")")" \
     "$(json_bool_pair "policy_enabled" "${BOX_POLICY_ENABLED}")" \
     "$(json_bool_pair "watcher_running" "${watcher_running}")" \
     "$(json_num_pair "pid" "${pid}")" \
-    "$(json_pair "desired_state" "$(policy_read_state_value "desired_state" || printf 'disabled')")" \
-    "$(json_pair "applied_state" "$(policy_read_state_value "applied_state" || printf 'unchanged')")" \
+    "$(json_pair "desired_state" "$(policy_snapshot_get "desired_state" "disabled")")" \
+    "$(json_pair "applied_state" "$(policy_snapshot_get "applied_state" "unchanged")")" \
     "$(json_pair "proxy_mode" "${BOX_POLICY_PROXY_MODE}")" \
     "$(json_num_pair "debounce_seconds" "${BOX_POLICY_DEBOUNCE_SECONDS}")" \
     "\"active_ifaces\":$(policy_active_ifaces_json)" \
-    "$(json_bool_pair "wifi_connected" "$(policy_read_state_value "wifi_connected" || printf 'false')")" \
-    "$(json_pair "ssid" "$(policy_read_state_value "ssid" || true)")" \
-    "$(json_pair "bssid" "$(policy_read_state_value "bssid" || true)")" \
-    "$(json_bool_pair "disable_marker_present" "$(policy_read_state_value "disable_marker_present" || printf 'false')")" \
-    "$(json_pair "last_reason" "$(policy_read_state_value "last_reason" || true)")" \
-    "$(json_pair "last_error" "$(policy_read_state_value "last_error" || true)")" \
-    "$(json_pair "last_event" "$(policy_read_state_value "last_event" || true)")" \
-    "$(json_pair "last_event_ts" "$(policy_read_state_value "last_event_ts" || true)")" \
-    "$(json_pair "last_refresh_ts" "$(policy_read_state_value "last_refresh_ts" || true)")"
+    "$(json_bool_pair "wifi_connected" "$(policy_snapshot_get "wifi_connected" "false")")" \
+    "$(json_pair "ssid" "$(policy_snapshot_get "ssid" "")")" \
+    "$(json_pair "bssid" "$(policy_snapshot_get "bssid" "")")" \
+    "$(json_bool_pair "disable_marker_present" "$(policy_snapshot_get "disable_marker_present" "false")")" \
+    "$(json_pair "last_reason" "$(policy_snapshot_get "last_reason" "")")" \
+    "$(json_pair "last_error" "$(policy_snapshot_get "last_error" "")")" \
+    "$(json_pair "last_event" "$(policy_snapshot_get "last_event" "")")" \
+    "$(json_pair "last_event_ts" "$(policy_snapshot_get "last_event_ts" "")")" \
+    "$(json_pair "last_refresh_ts" "$(policy_snapshot_get "last_refresh_ts" "")")"
 }
 
 policy_status() {
