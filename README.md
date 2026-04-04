@@ -28,6 +28,20 @@ Android reference artifacts are kept untouched in `box-reference/`.
 4. Run integration checks:
    - `./tests/integration/test_phase2.sh`
    - `sudo ./tests/integration/test_real_kernel.sh`
+   - `./tests/integration/test_docker_privileged.sh`
+
+## Docker Test Harness
+
+- Local docker-backed privileged validation:
+  - `./tests/integration/test_docker_privileged.sh`
+- Optional secret/env input is loaded from ignored file:
+  - `.box-test-subscription.env`
+- Tracked template:
+  - `.box-test-subscription.env.example`
+- The harness runs:
+  - `./tests/integration/test_phase2.sh`
+  - `./tests/integration/test_real_kernel.sh`
+- It uses a privileged Arch container and still shares the host kernel, so nftables kernel/runtime gaps will reproduce there too.
 
 ## Arch Package Build/Install
 
@@ -80,8 +94,7 @@ Manual equivalent:
 Workflow file: `.github/workflows/ci.yml`
 
 On push/PR:
-- `bash -n` checks on shell scripts
-- `shellcheck` when available
+- `./tests/lint_shell.sh`
 - mock integration: `./tests/integration/test_phase2.sh`
 - privileged integration: `sudo ./tests/integration/test_real_kernel.sh` (suite prints `SKIP` when capabilities/tooling are unavailable)
 - Arch package build in Arch container

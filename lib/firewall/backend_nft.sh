@@ -186,6 +186,35 @@ backend_nft_cleanup() {
   fi
 }
 
+backend_nft_ruleset_debug_path() {
+  init_runtime_paths
+  printf '%s/state/nft-last-ruleset.nft\n' "${BOX_RUN_DIR}"
+}
+
+backend_nft_stderr_debug_path() {
+  init_runtime_paths
+  printf '%s/state/nft-last-error.log\n' "${BOX_RUN_DIR}"
+}
+
+backend_nft_record_failure_artifacts() {
+  local ruleset="${1:-}"
+  local stderr_file="${2:-}"
+  local ruleset_path error_path
+
+  ruleset_path="$(backend_nft_ruleset_debug_path)"
+  error_path="$(backend_nft_stderr_debug_path)"
+
+  printf '%s\n' "${ruleset}" >"${ruleset_path}"
+  if [[ -n "${stderr_file}" && -f "${stderr_file}" ]]; then
+    cp -f "${stderr_file}" "${error_path}" 2>/dev/null || true
+  else
+    : >"${error_path}"
+  fi
+
+  log "ERROR" "firewall" "E_NFT_RULESET_DUMP" \
+    "nft failure artifacts written ruleset=${ruleset_path} stderr=${error_path}"
+}
+
 backend_nft_build_ruleset() {
   local mode="${1:?missing mode}"
   local mark_value tailscale_mark tailscale_mask
@@ -204,7 +233,7 @@ add rule inet ${BOX_NFT_TABLE_INET} output jump box_main
 add rule inet ${BOX_NFT_TABLE_INET} box_main jump box_dns
 add rule inet ${BOX_NFT_TABLE_INET} box_main iifname "lo" return
 add rule inet ${BOX_NFT_TABLE_INET} box_main ip daddr 127.0.0.0/8 return
-add rule inet ${BOX_NFT_TABLE_INET} box_main comment "BOX_POLICY_PLACEHOLDER" return
+add rule inet ${BOX_NFT_TABLE_INET} box_main return comment "BOX_POLICY_PLACEHOLDER"
 add table ip ${BOX_NFT_TABLE_IP}
 add chain ip ${BOX_NFT_TABLE_IP} prerouting { type nat hook prerouting priority dstnat; policy accept; }
 add chain ip ${BOX_NFT_TABLE_IP} output { type nat hook output priority -100; policy accept; }
@@ -238,7 +267,7 @@ EOF
       printf 'add rule inet %s box_main return\n' "${BOX_NFT_TABLE_INET}"
       ;;
     redirect)
-      printf 'add rule ip %s box_main tcp redirect to :%s\n' "${BOX_NFT_TABLE_IP}" "${BOX_REDIR_PORT}"
+      printf 'add rule ip %s box_main meta l4proto tcp redirect to :%s\n' "${BOX_NFT_TABLE_IP}" "${BOX_REDIR_PORT}"
       ;;
     tproxy)
       if backend_nft_probe_tproxy; then
@@ -250,7 +279,7 @@ EOF
       fi
       ;;
     mixed|enhance)
-      printf 'add rule ip %s box_main tcp redirect to :%s\n' "${BOX_NFT_TABLE_IP}" "${BOX_REDIR_PORT}"
+      printf 'add rule ip %s box_main meta l4proto tcp redirect to :%s\n' "${BOX_NFT_TABLE_IP}" "${BOX_REDIR_PORT}"
       if backend_nft_probe_tproxy; then
         printf 'add rule inet %s box_main meta l4proto udp tproxy to :%s meta mark set %s\n' "${BOX_NFT_TABLE_INET}" "${BOX_TPROXY_PORT}" "${mark_value}"
       else
@@ -298,7 +327,7 @@ backend_nft_dry_run() {
 
 backend_nft_apply_mode() {
   local mode="${1:?missing mode}"
-  local nft ruleset
+  local nft ruleset stderr_file
 
   backend_nft_init
   FW_LAST_ERROR=""
@@ -316,7 +345,8 @@ backend_nft_apply_mode() {
   }
 
   nft="$(nft_cmd)"
-  if ! printf '%s\n' "${ruleset}" | "${nft}" -f - >/dev/null 2>&1; then
+  stderr_file="$(mktemp)"
+  if ! printf '%s\n' "${ruleset}" | "${nft}" -f - >/dev/null 2>"${stderr_file}"; then
     # Some kernels expose nft userspace tproxy tokens but fail loading tproxy expressions.
     # Retry once with explicit non-tproxy fallback before failing apply.
     if backend_nft_probe_tproxy; then
@@ -325,22 +355,28 @@ backend_nft_apply_mode() {
       BOX_NFT_FORCE_NO_TPROXY=1
       ruleset="$(backend_nft_build_ruleset "${mode}")" || {
         unset BOX_NFT_FORCE_NO_TPROXY
+        rm -f "${stderr_file}"
         FW_LAST_ERROR="failed to build nft fallback ruleset"
         return "${E_FIREWALL_APPLY}"
       }
-      if ! printf '%s\n' "${ruleset}" | "${nft}" -f - >/dev/null 2>&1; then
+      if ! printf '%s\n' "${ruleset}" | "${nft}" -f - >/dev/null 2>"${stderr_file}"; then
         unset BOX_NFT_FORCE_NO_TPROXY
+        backend_nft_record_failure_artifacts "${ruleset}" "${stderr_file}"
+        rm -f "${stderr_file}"
         FW_LAST_ERROR="nft apply failed"
         backend_nft_cleanup || true
         return "${E_FIREWALL_APPLY}"
       fi
       unset BOX_NFT_FORCE_NO_TPROXY
     else
+      backend_nft_record_failure_artifacts "${ruleset}" "${stderr_file}"
+      rm -f "${stderr_file}"
       FW_LAST_ERROR="nft apply failed"
       backend_nft_cleanup || true
       return "${E_FIREWALL_APPLY}"
     fi
   fi
+  rm -f "${stderr_file}"
 
   case "${mode}" in
     tproxy|mixed|enhance) backend_nft_ensure_policy_route ;;

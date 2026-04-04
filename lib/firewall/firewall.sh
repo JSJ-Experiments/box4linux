@@ -76,13 +76,11 @@ firewall_disable_locked() {
   require_root || return 1
   load_config
 
-  case "${BOX_FIREWALL_BACKEND}" in
-    iptables) backend_iptables_cleanup ;;
-    nftables) backend_nft_cleanup ;;
-    *)
-      log "WARN" "firewall" "FW_BACKEND_UNKNOWN" "unknown backend on disable: ${BOX_FIREWALL_BACKEND}"
-      ;;
-  esac
+  # Disable must be rollback-safe even if the configured backend changed since
+  # the last apply. Both cleanup paths are BOX-owned only, so removing both is
+  # the safest way to avoid leaked interception state.
+  backend_iptables_cleanup
+  backend_nft_cleanup
 
   firewall_write_state "${BOX_NETWORK_MODE}" "disabled"
   log "INFO" "firewall" "FW_DISABLED" "firewall disabled"

@@ -17,3 +17,6 @@ box-reference/
 packaging/arch/*.pkg.tar.*
 packaging/arch/pkg/
 packaging/arch/src/
+
+# Local docker/vm test secrets
+.box-test-subscription.env
