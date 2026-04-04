@@ -37,7 +37,7 @@ Helper script:
 - Installed to `/usr/share/doc/box4linux/systemd-lifecycle.sh`
 
 Safe operations:
-- `enable`: daemon-reload, enable `box.service`, `box-firewall.service`, and `box-policy.service`, then start service
+- `enable`: daemon-reload, enable `box.service` and `box-firewall.service`, enable `box-policy.service` only when `[policy].enabled = true`, enable `box-update-all.timer` as the default scheduled updater timer, then start service
 - `disable`: stop/disable service, firewall, policy, and shipped updater units/timers, then daemon-reload
 - `restart`: restart service/policy units without touching config/data
 

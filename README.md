@@ -124,7 +124,7 @@ Behavior:
 - active Wi-Fi identity prefers `nmcli`, then falls back to `iw`
 - `wlan+`-style patterns are treated as prefix wildcards
 - address-change refresh is decoupled from policy evaluation and triggers a background `firewall renew`
-- `box-policy.service` is optional and is pulled in by `box.service`
+- `box-policy.service` is optional and should only be enabled when `[policy].enabled = true`
 
 ## Docker Test Harness
 
@@ -170,11 +170,14 @@ Use helper script from package docs:
 - `sudo /usr/share/doc/box4linux/systemd-lifecycle.sh enable`
 - `sudo /usr/share/doc/box4linux/systemd-lifecycle.sh status`
 - `sudo /usr/share/doc/box4linux/systemd-lifecycle.sh disable`
+- The lifecycle helper enables `box-update-all.timer` by default and only enables `box-policy.service` when the loaded config has `[policy].enabled = true`.
 
 Manual equivalent:
 - `sudo systemctl daemon-reload`
-- `sudo systemctl enable --now box.service box-firewall.service box-policy.service`
-- `sudo systemctl disable --now box-policy.service box-firewall.service box.service`
+- `sudo systemctl enable --now box.service box-firewall.service`
+- `sudo systemctl enable --now box-policy.service` only when `[policy].enabled = true`
+- `sudo systemctl enable --now box-update-all.timer` for the default scheduled updater path
+- `sudo systemctl disable --now box-policy.service box-firewall.service box.service box-update-all.timer`
 
 ## Packaged Operational Quickstart
 

@@ -58,10 +58,12 @@ policy_write_state() {
   local last_event="${2:-}"
   local last_event_ts="${3:-}"
   local last_refresh_ts="${4:-}"
-  local state_file
+  local state_file state_dir tmp_file
 
   state_file="$(policy_state_file)"
-  cat >"${state_file}" <<EOF
+  state_dir="$(dirname "${state_file}")"
+  tmp_file="$(mktemp "${state_dir}/policy.state.tmp.XXXXXX")"
+  cat >"${tmp_file}" <<EOF
 status=${status}
 policy_enabled=${BOX_POLICY_ENABLED}
 desired_state=${POLICY_DESIRED_STATE}
@@ -82,6 +84,7 @@ last_event_ts=${last_event_ts}
 last_refresh_ts=${last_refresh_ts}
 timestamp=$(timestamp_utc)
 EOF
+  mv -f "${tmp_file}" "${state_file}"
 }
 
 policy_clear_state() {
@@ -192,6 +195,13 @@ policy_monitor_loop() {
   policy_apply_cycle "startup" "$(timestamp_utc)" "false"
 
   while true; do
+    marker_state="$(if policy_disable_marker_present; then printf 'present'; else printf 'absent'; fi)"
+    if [[ "${marker_state}" != "${previous_marker_state}" ]]; then
+      previous_marker_state="${marker_state}"
+      policy_apply_cycle "disable-marker" "$(timestamp_utc)" "false"
+      continue
+    fi
+
     if IFS= read -r -t 1 line <&"${POLICY_EVENTS[0]}"; then
       pending_event="${line}"
       pending_ts="$(timestamp_utc)"
@@ -205,17 +215,19 @@ policy_monitor_loop() {
         case "${next_line}" in
           *inet*|*inet6*|*address*|*Deleted*) refresh_requested="true" ;;
         esac
+        marker_state="$(if policy_disable_marker_present; then printf 'present'; else printf 'absent'; fi)"
+        if [[ "${marker_state}" != "${previous_marker_state}" ]]; then
+          previous_marker_state="${marker_state}"
+          pending_event="disable-marker"
+          pending_ts="$(timestamp_utc)"
+          refresh_requested="false"
+          break
+        fi
       done
 
       policy_apply_cycle "${pending_event:-event}" "${pending_ts}" "${refresh_requested}"
       refresh_requested="false"
       continue
-    fi
-
-    marker_state="$(if policy_disable_marker_present; then printf 'present'; else printf 'absent'; fi)"
-    if [[ "${marker_state}" != "${previous_marker_state}" ]]; then
-      previous_marker_state="${marker_state}"
-      policy_apply_cycle "disable-marker" "$(timestamp_utc)" "false"
     fi
   done
 }
