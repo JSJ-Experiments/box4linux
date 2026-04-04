@@ -41,6 +41,10 @@ ignore_bssids = []
 artifact_dir = "/var/lib/box/artifacts"
 staging_dir = "/var/lib/box/staging"
 checksum_policy = "optional"
+fetch_retries = 3
+fetch_retry_backoff_ms = 750
+use_ghproxy = false
+ghproxy_url = "https://ghfast.top"
 kernel_interval = "daily"
 subs_interval = "hourly"
 geo_interval = "daily"
@@ -64,14 +68,19 @@ checksum_file = ""
 target = ""
 
 [updater.subs]
+source = "auto"
+preset = ""
 url = ""
 file = ""
 checksum = ""
 checksum_file = ""
 target = ""
+provider_names = []
+provider_urls = []
 
 [updater.geo]
 source = "auto"
+preset = ""
 release_api_url = ""
 release_repo = ""
 release_channel = "stable"

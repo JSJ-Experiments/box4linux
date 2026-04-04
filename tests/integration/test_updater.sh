@@ -32,6 +32,9 @@ export BOX_CAP_TPROXY=1
 export BOX_RUN_DIR="${TMP_DIR}/run"
 export BOX_VAR_DIR="${TMP_DIR}/var"
 export BOX_LOG_DIR="${TMP_DIR}/log"
+export MOCK_CURL_MAP_FILE="${TMP_DIR}/mock/curl.map"
+export MOCK_CURL_PUT_LOG="${TMP_DIR}/mock/curl.put.log"
+export MOCK_CURL_FLAKY_STATE_FILE="${TMP_DIR}/mock/curl.flaky"
 
 CONFIG_FILE="${TMP_DIR}/box.toml"
 INSTALLED_BIN_DIR="${TMP_DIR}/installed-bin"
@@ -43,7 +46,7 @@ ACTIVE_MOCK_DIR="${TMP_DIR}/active-mockbin"
 
 export BOX_CONFIG_FILE="${CONFIG_FILE}"
 mkdir -p "${TMP_DIR}/mock" "${BOX_RUN_DIR}" "${BOX_VAR_DIR}" "${BOX_LOG_DIR}" "${INSTALLED_BIN_DIR}" "${PROFILE_DIR}" "${SOURCE_DIR}" "${ACTIVE_MOCK_DIR}"
-touch "${MOCK_IPTABLES_STATE}" "${MOCK_IP_STATE}" "${MOCK_NFT_STATE}"
+touch "${MOCK_IPTABLES_STATE}" "${MOCK_IP_STATE}" "${MOCK_NFT_STATE}" "${MOCK_CURL_MAP_FILE}" "${MOCK_CURL_PUT_LOG}"
 
 for required_cmd in jq zip unzip gzip; do
   if ! command -v "${required_cmd}" >/dev/null 2>&1; then
@@ -56,6 +59,9 @@ PATH_ORIG="${PATH}"
 for helper in curl ip iptables nft sing-box; do
   ln -sf "${MOCK_DIR}/${helper}" "${ACTIVE_MOCK_DIR}/${helper}"
 done
+
+PHONE_TEMPLATE="${PROFILE_DIR}/phone-mihomo-config.yml"
+cp -f "${ROOT_DIR}/etc/box/profiles/phone-mihomo-config.yml" "${PHONE_TEMPLATE}"
 
 sha256_of() {
   sha256sum "$1" | awk '{print $1}'
@@ -210,6 +216,15 @@ rules:
   - MATCH,DIRECT
 EOF_MIHOMO_LIVE
 
+cat >"${PROFILE_DIR}/mihomo-live-api.yaml" <<'EOF_MIHOMO_API'
+mode: rule
+mixed-port: 7890
+external-controller: 127.0.0.1:9090
+secret: test-secret
+rules:
+  - MATCH,DIRECT
+EOF_MIHOMO_API
+
 cat >"${PROFILE_DIR}/mihomo-dashboard.yaml" <<EOF_MIHOMO_DASH
 mode: rule
 mixed-port: 7890
@@ -234,6 +249,21 @@ cat >"${PROFILE_DIR}/sing-live.json" <<'EOF_SING_LIVE'
   ]
 }
 EOF_SING_LIVE
+
+cat >"${PROFILE_DIR}/sing-live-api.json" <<'EOF_SING_LIVE_API'
+{
+  "experimental": {
+    "clash_api": {
+      "external_controller": "127.0.0.1:9091",
+      "secret": "sing-secret"
+    }
+  },
+  "log": { "level": "info" },
+  "outbounds": [
+    { "type": "direct", "tag": "direct" }
+  ]
+}
+EOF_SING_LIVE_API
 
 cat >"${PROFILE_DIR}/sing-dashboard-generic.json" <<EOF_SING_DASH_GENERIC
 {
@@ -381,14 +411,14 @@ cat >"${SOURCE_DIR}/geo-release-list.json" <<EOF_GEO_RELEASE_JSON
 ]
 EOF_GEO_RELEASE_JSON
 
-printf '[1/16] updater status with no configured sources\n'
+printf '[1/19] updater status with no configured sources\n'
 write_common_config "mihomo" "${PROFILE_DIR}/mihomo-live.yaml" ""
 status_json="$(must_run update status --json)"
 assert_contains "${status_json}" '"artifact_dir":"'
 assert_contains "${status_json}" '"kernel":{"configured":false'
 assert_contains "${status_json}" '"subs":{"configured":false'
 
-printf '[2/16] kernel update idempotent rerun\n'
+printf '[2/19] kernel update idempotent rerun\n'
 write_common_config "mihomo" "${PROFILE_DIR}/mihomo-live.yaml" "[updater.kernel]
 file = \"${SOURCE_DIR}/kernel-v1\"
 checksum = \"${KERNEL_V1_SHA}\"
@@ -403,7 +433,7 @@ status_json="$(must_run update status --json)"
 assert_contains "${status_json}" '"kernel":{"configured":true,"status":"unchanged"'
 assert_contains "${status_json}" '"installed_sha256":"'"${KERNEL_V1_SHA}"'"'
 
-printf '[3/16] checksum mismatch fails safely\n'
+printf '[3/19] checksum mismatch fails safely\n'
 write_common_config "mihomo" "${PROFILE_DIR}/mihomo-live.yaml" "[updater.kernel]
 file = \"${SOURCE_DIR}/kernel-v2\"
 checksum = \"0000000000000000000000000000000000000000000000000000000000000000\"
@@ -414,7 +444,23 @@ assert_contains "${status_json}" '"kernel":{"configured":true,"status":"error"'
 assert_contains "${status_json}" '"last_error":"checksum verification failed"'
 assert_file_contains "${INSTALLED_BIN_DIR}/mihomo" 'mock-kernel-v1'
 
-printf '[4/16] download failure is reported\n'
+printf '[4/19] fetch retry/backoff recovers flaky download\n'
+printf 'https://updates.invalid/retry-geo.dat\t%s\n' "${SOURCE_DIR}/geo-v2.dat" >"${MOCK_CURL_MAP_FILE}"
+export MOCK_CURL_FLAKY_URL='https://updates.invalid/retry-geo.dat'
+export MOCK_CURL_FLAKY_ATTEMPTS=2
+rm -f "${MOCK_CURL_FLAKY_STATE_FILE}"
+write_common_config "mihomo" "${PROFILE_DIR}/mihomo-live.yaml" "fetch_retries = 3
+fetch_retry_backoff_ms = 1
+
+[updater.geo]
+url = \"https://updates.invalid/retry-geo.dat\"
+target = \"${ARTIFACT_DIR}/geo/retry.dat\""
+must_run update geo >/dev/null
+assert_file_contains "${ARTIFACT_DIR}/geo/retry.dat" 'geo-version-2'
+assert_file_contains "${MOCK_CURL_FLAKY_STATE_FILE}" '3'
+unset MOCK_CURL_FLAKY_URL MOCK_CURL_FLAKY_ATTEMPTS
+
+printf '[5/19] download failure is reported\n'
 export MOCK_CURL_FAIL_URL='https://updates.invalid/geo.dat'
 write_common_config "mihomo" "${PROFILE_DIR}/mihomo-live.yaml" "[updater.geo]
 url = \"https://updates.invalid/geo.dat\"
@@ -425,7 +471,7 @@ assert_contains "${status_json}" '"geo":{"configured":true,"status":"error"'
 assert_contains "${status_json}" '"last_error":"download failed"'
 unset MOCK_CURL_FAIL_URL
 
-printf '[5/16] update all installs geo and dashboard payloads\n'
+printf '[6/19] update all installs geo and dashboard payloads\n'
 write_common_config "mihomo" "${PROFILE_DIR}/mihomo-live.yaml" "[updater.kernel]
 file = \"${SOURCE_DIR}/kernel-v1\"
 checksum = \"${KERNEL_V1_SHA}\"
@@ -449,7 +495,7 @@ assert_contains "${status_json}" '"geo":{"configured":true,"status":"success"'
 assert_contains "${status_json}" '"dashboard":{"configured":true,"status":"success"'
 assert_contains "${status_json}" '"subs":{"configured":false,"status":"skipped"'
 
-printf '[6/16] dashboard updater can derive target and url from core config\n'
+printf '[7/19] dashboard updater can derive target and url from core config\n'
 write_common_config "mihomo" "${PROFILE_DIR}/mihomo-dashboard.yaml" ""
 status_json="$(must_run update status --json)"
 assert_contains "${status_json}" '"dashboard":{"configured":true'
@@ -461,7 +507,7 @@ rm -rf "${PROFILE_DIR}/ui/dashboard"
 must_run update all >/dev/null
 assert_file_contains "${PROFILE_DIR}/ui/dashboard/index.html" 'dashboard-zip'
 
-printf '[7/16] dashboard updater falls back to ./dashboard relative to core config\n'
+printf '[8/19] dashboard updater falls back to ./dashboard relative to core config\n'
 export MOCK_CURL_RESPONSE_FILE="${SOURCE_DIR}/dashboard-v1.zip"
 rm -rf "${PROFILE_DIR}/dashboard"
 write_common_config "mihomo" "${PROFILE_DIR}/mihomo-live.yaml" ""
@@ -471,14 +517,29 @@ must_run update all >/dev/null
 assert_file_contains "${PROFILE_DIR}/dashboard/index.html" 'dashboard-zip'
 unset MOCK_CURL_RESPONSE_FILE
 
-printf '[8/16] sing-box dashboard discovery accepts generic external_ui keys\n'
+printf '[9/19] sing-box dashboard discovery accepts generic external_ui keys\n'
 write_common_config "sing-box" "${PROFILE_DIR}/sing-dashboard-generic.json" ""
 status_json="$(must_run update status --json)"
 assert_contains "${status_json}" '"dashboard":{"configured":true'
 must_run update dashboard >/dev/null
 assert_file_contains "${PROFILE_DIR}/ui/sing-dashboard/index.html" 'dashboard-zip'
 
-printf '[9/16] kernel release resolver selects stable archive asset\n'
+printf '[10/19] mihomo phone preset generates config from sanitized template\n'
+write_common_config "mihomo" "${PHONE_TEMPLATE}" "[updater.subs]
+preset = \"mihomo_phone\"
+target = \"${PHONE_TEMPLATE}\"
+provider_names = [\"proxy1\", \"proxy3\", \"proxy4\", \"proxy5\", \"proxy6\"]
+provider_urls = [\"https://subs.example/proxy1\", \"https://subs.example/proxy3\", \"https://subs.example/proxy4\", \"https://subs.example/proxy5\", \"https://subs.example/proxy6\"]"
+must_run update subs >/dev/null
+assert_file_contains "${PHONE_TEMPLATE}" 'https://subs.example/proxy1'
+assert_file_contains "${PHONE_TEMPLATE}" 'https://subs.example/proxy6'
+assert_file_contains "${PHONE_TEMPLATE}" 'https://github.com/MetaCubeX/meta-rules-dat/raw/refs/heads/meta/geo/geosite/cn.mrs'
+assert_not_contains "$(cat "${PHONE_TEMPLATE}")" '<SUBSCRIPTION_URL_PROXY1>'
+status_json="$(must_run update status --json)"
+assert_contains "${status_json}" '"subs":{"configured":true,"status":"success"'
+assert_contains "${status_json}" '"last_handoff":"none"'
+
+printf '[11/19] kernel release resolver selects stable archive asset\n'
 write_common_config "sing-box" "${PROFILE_DIR}/sing-live.json" "[updater.kernel]
 source = \"release\"
 release_api_url = \"file://${SOURCE_DIR}/kernel-release-stable.json\"
@@ -492,7 +553,7 @@ status_json="$(must_run update status --json)"
 assert_contains "${status_json}" "\"source_ref\":\"file://${SOURCE_DIR}/sing-box-1.0.0-linux-amd64.tar.gz\""
 assert_contains "${status_json}" "\"installed_sha256\":\"${RELEASE_KERNEL_BIN_SHA}\""
 
-printf '[10/16] mihomo kernel release resolver installs gzip asset\n'
+printf '[12/19] mihomo kernel release resolver installs gzip asset\n'
 write_common_config "mihomo" "${PROFILE_DIR}/mihomo-live.yaml" "[updater.kernel]
 source = \"release\"
 release_api_url = \"file://${SOURCE_DIR}/mihomo-release-stable.json\"
@@ -506,7 +567,7 @@ status_json="$(must_run update status --json)"
 assert_contains "${status_json}" "\"source_ref\":\"file://${SOURCE_DIR}/mihomo-linux-amd64-v1.0.0.gz\""
 assert_contains "${status_json}" "\"installed_sha256\":\"${MIHOMO_RELEASE_BIN_SHA}\""
 
-printf '[11/16] geo release resolver selects prerelease asset\n'
+printf '[13/19] geo release resolver selects prerelease asset\n'
 write_common_config "mihomo" "${PROFILE_DIR}/mihomo-live.yaml" "[updater.geo]
 source = \"release\"
 release_api_url = \"file://${SOURCE_DIR}/geo-release-list.json\"
@@ -519,7 +580,22 @@ assert_file_contains "${ARTIFACT_DIR}/geo/geo-release.dat" 'geo-release-prerelea
 status_json="$(must_run update status --json)"
 assert_contains "${status_json}" "\"source_ref\":\"file://${SOURCE_DIR}/geo-release-prerelease.dat\""
 
-printf '[12/16] geo update does not restart running service\n'
+printf '[14/19] geo preset installs metacubex mihomo bundle\n'
+cat >"${MOCK_CURL_MAP_FILE}" <<EOF_GEO_PRESET_MAP
+https://github.com/MetaCubeX/meta-rules-dat/raw/release/country-lite.mmdb	${SOURCE_DIR}/geo-v1.dat
+https://github.com/MetaCubeX/meta-rules-dat/raw/release/geosite.dat	${SOURCE_DIR}/geo-v2.dat
+EOF_GEO_PRESET_MAP
+write_common_config "mihomo" "${PROFILE_DIR}/mihomo-live.yaml" "[updater.geo]
+preset = \"metacubex_mihomo\"
+target = \"${ARTIFACT_DIR}/geo-preset\""
+must_run update geo >/dev/null
+assert_file_contains "${ARTIFACT_DIR}/geo-preset/Country.mmdb" 'geo-version-1'
+assert_file_contains "${ARTIFACT_DIR}/geo-preset/GeoSite.dat" 'geo-version-2'
+status_json="$(must_run update status --json)"
+assert_contains "${status_json}" "\"target_path\":\"${ARTIFACT_DIR}/geo-preset\""
+assert_contains "${status_json}" '"geo":{"configured":true,"status":"success"'
+
+printf '[15/19] geo update does not restart running service\n'
 write_common_config "mihomo" "${PROFILE_DIR}/mihomo-live.yaml" "[updater.geo]
 file = \"${SOURCE_DIR}/geo-v2.dat\"
 checksum = \"$(sha256_of "${SOURCE_DIR}/geo-v2.dat")\"
@@ -534,7 +610,7 @@ assert_contains "${status_json}" '"geo":{"configured":true,"status":"success"'
 assert_contains "${status_json}" '"last_handoff":"none"'
 must_run service stop >/dev/null
 
-printf '[13/16] inactive kernel target does not restart running service\n'
+printf '[16/19] inactive kernel target does not restart running service\n'
 write_common_config "mihomo" "${PROFILE_DIR}/mihomo-live.yaml" "[updater.kernel]
 file = \"${SOURCE_DIR}/kernel-v2\"
 checksum = \"${KERNEL_V2_SHA}\"
@@ -549,7 +625,7 @@ assert_contains "${status_json}" '"kernel":{"configured":true,"status":"success"
 assert_contains "${status_json}" '"last_handoff":"none"'
 must_run service stop >/dev/null
 
-printf '[14/16] failed kernel handoff restores old binary and service\n'
+printf '[17/19] failed kernel handoff restores old binary and service\n'
 cat >"${INSTALLED_BIN_DIR}/mihomo" <<'EOF_ACTIVE_GOOD'
 #!/usr/bin/env bash
 if [[ "${1:-}" == "-t" ]]; then
@@ -580,36 +656,42 @@ assert_file_contains "${INSTALLED_BIN_DIR}/mihomo" 'while true; do'
 must_run service stop >/dev/null
 PATH="${PATH_ORIG}"
 
-printf '[15/16] mihomo subscription update restarts running service\n'
-write_common_config "mihomo" "${PROFILE_DIR}/mihomo-live.yaml" "[updater.subs]
+printf '[18/19] mihomo subscription update reloads running service via controller API\n'
+: >"${MOCK_CURL_PUT_LOG}"
+write_common_config "mihomo" "${PROFILE_DIR}/mihomo-live-api.yaml" "[updater.subs]
 file = \"${SOURCE_DIR}/mihomo-updated.yaml\"
 checksum = \"${SUBS_MIHOMO_SHA}\"
-target = \"${PROFILE_DIR}/mihomo-live.yaml\""
+target = \"${PROFILE_DIR}/mihomo-live-api.yaml\""
 must_run service start >/dev/null
 mihomo_pid_before="$(service_pid)"
 must_run update subs >/dev/null
 mihomo_pid_after="$(service_pid)"
-assert_pid_changed "${mihomo_pid_before}" "${mihomo_pid_after}"
-assert_file_contains "${PROFILE_DIR}/mihomo-live.yaml" 'MATCH,REJECT'
+assert_pid_same "${mihomo_pid_before}" "${mihomo_pid_after}"
+assert_file_contains "${PROFILE_DIR}/mihomo-live-api.yaml" 'MATCH,REJECT'
+assert_file_contains "${MOCK_CURL_PUT_LOG}" 'method=PUT url=http://127.0.0.1:9090/configs?force=true'
+assert_file_contains "${MOCK_CURL_PUT_LOG}" 'header=Authorization: Bearer test-secret'
 status_json="$(must_run update status --json)"
 assert_contains "${status_json}" '"subs":{"configured":true,"status":"success"'
-assert_contains "${status_json}" '"last_handoff":"restart"'
+assert_contains "${status_json}" '"last_handoff":"reload"'
 must_run service stop >/dev/null
 
-printf '[16/16] sing-box subscription update falls back to restart\n'
-write_common_config "sing-box" "${PROFILE_DIR}/sing-live.json" "[updater.subs]
+printf '[19/19] sing-box subscription update reloads running service via controller API\n'
+: >"${MOCK_CURL_PUT_LOG}"
+write_common_config "sing-box" "${PROFILE_DIR}/sing-live-api.json" "[updater.subs]
 file = \"${SOURCE_DIR}/sing-updated.json\"
 checksum = \"${SUBS_SING_SHA}\"
-target = \"${PROFILE_DIR}/sing-live.json\""
+target = \"${PROFILE_DIR}/sing-live-api.json\""
 must_run service start >/dev/null
 sing_pid_before="$(service_pid)"
 must_run update subs >/dev/null
 sing_pid_after="$(service_pid)"
-assert_pid_changed "${sing_pid_before}" "${sing_pid_after}"
-assert_file_contains "${PROFILE_DIR}/sing-live.json" '"level": "warn"'
+assert_pid_same "${sing_pid_before}" "${sing_pid_after}"
+assert_file_contains "${PROFILE_DIR}/sing-live-api.json" '"level": "warn"'
+assert_file_contains "${MOCK_CURL_PUT_LOG}" 'method=PUT url=http://127.0.0.1:9091/configs?force=true'
+assert_file_contains "${MOCK_CURL_PUT_LOG}" 'header=Authorization: Bearer sing-secret'
 status_json="$(must_run update status --json)"
 assert_contains "${status_json}" '"subs":{"configured":true,"status":"success"'
-assert_contains "${status_json}" '"last_handoff":"restart"'
+assert_contains "${status_json}" '"last_handoff":"reload"'
 must_run service stop >/dev/null
 
 printf 'PASS: updater integration checks completed\n'

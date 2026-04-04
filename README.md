@@ -78,10 +78,12 @@ Release resolver fields for `kernel` and `geo`:
 Failure semantics:
 - downloads go to staging first
 - checksum verification follows `checksum_policy = off|optional|required`
+- URL fetches retry with exponential backoff controlled by `fetch_retries` and `fetch_retry_backoff_ms`
+- `use_ghproxy = true` rewrites GitHub and raw GitHub download URLs through `ghproxy_url`
 - staged payload is validated before install
 - install stages beside the target and renames into place with backup/restore on failure
 - runtime handoff prefers reload when supported, otherwise controlled restart
-- current `mihomo` and `sing-box` updater handoff uses controlled restart; API reload hooks remain TODO
+- `mihomo` and `sing-box` subscription updates use controller API reload when the rendered config exposes `external-controller`/`external_controller`; otherwise they fall back to controlled restart
 - release resolution requires `jq`
 - `source = "auto"` does not implicitly enable release downloads; set `source = "release"` explicitly
 - kernel release assets support raw binaries, `.gz`, `.tar`, `.tar.gz`, `.tgz`, and `.tar.xz`
@@ -89,6 +91,8 @@ Failure semantics:
 - nested dashboard archive roots are flattened automatically when a single top-level directory is present
 - dashboard target and download URL can be derived from core config (`external-ui` / `external_ui`, `external-ui-download-url` / `external_ui_download_url`)
 - if the core config omits a dashboard target, updater falls back to `./dashboard` relative to the core config path
+- `updater.subs.preset = "mihomo_phone"` renders a sanitized Mihomo phone profile template from `/etc/box/profiles/phone-mihomo-config.yml`
+- `updater.geo.preset` supports `auto`, `metacubex_mihomo`, `metacubex_sing_box`, and `metacubex_legacy`
 - `geo` updates do not restart the running core
 - `kernel` updates restart only when the updated target matches the active core binary
 
@@ -152,6 +156,7 @@ Installed layout:
 - `/usr/lib/box4linux/cmd/boxctl`
 - `/usr/lib/box4linux/lib/...`
 - `/etc/box/box.toml`
+- `/etc/box/profiles/phone-mihomo-config.yml`
 - `/usr/lib/systemd/system/box.service`
 - `/usr/lib/systemd/system/box-firewall.service`
 - `/usr/lib/systemd/system/box-policy.service`
@@ -250,5 +255,5 @@ Optional manual purge of local state:
 
 - Full UID/GID/interface/MAC policy graph in firewall.
 - Full IPv6 interception/hijack parity.
-- API-based reload hooks for `mihomo` and `sing-box`.
+- Richer built-in geo/subscription preset coverage beyond the default Mihomo phone and MetaCubeX bundles.
 - Broader kernel-capability probing across distro variants.

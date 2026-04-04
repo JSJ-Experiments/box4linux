@@ -16,10 +16,12 @@ UP_INSTALL_KIND=""
 UP_INTERVAL=""
 UP_REQUIRES_HANDOFF="false"
 UP_ARCHIVE_MEMBER_REGEX=""
+UP_PRESET_NAME=""
+UP_TARGET_ROOT=""
 
 updater_component_configured() {
   local component="${1:?missing component}"
-  local source_mode source_ref="" release_repo="" release_api_url="" dashboard_target=""
+  local source_mode source_ref="" release_repo="" release_api_url="" dashboard_target="" preset=""
 
   case "${component}" in
     kernel)
@@ -31,12 +33,14 @@ updater_component_configured() {
     subs)
       source_mode="auto"
       source_ref="${BOX_UPDATER_SUBS_URL:-${BOX_UPDATER_SUBS_FILE:-}}"
+      preset="${BOX_UPDATER_SUBS_PRESET}"
       ;;
     geo)
       source_mode="${BOX_UPDATER_GEO_SOURCE}"
       source_ref="${BOX_UPDATER_GEO_URL:-${BOX_UPDATER_GEO_FILE:-}}"
       release_repo="${BOX_UPDATER_GEO_RELEASE_REPO}"
       release_api_url="${BOX_UPDATER_GEO_RELEASE_API_URL}"
+      preset="${BOX_UPDATER_GEO_PRESET}"
       ;;
     dashboard)
       source_mode="auto"
@@ -53,7 +57,7 @@ updater_component_configured() {
       [[ -n "${release_repo}" || -n "${release_api_url}" ]]
       ;;
     auto)
-      [[ -n "${source_ref}" || -n "${release_repo}" || -n "${release_api_url}" || -n "${dashboard_target}" ]]
+      [[ -n "${source_ref}" || -n "${release_repo}" || -n "${release_api_url}" || -n "${dashboard_target}" || -n "${preset}" ]]
       ;;
     *)
       [[ -n "${source_ref}" ]]
@@ -148,7 +152,11 @@ updater_release_default_asset_regex() {
   arch_regex="$(updater_release_arch_regex "${arch_name}")"
   case "${component}" in
     kernel)
-      printf '%s\n' "${BOX_CORE}.*${os_name}.*${arch_regex}"
+      case "${BOX_CORE}" in
+        mihomo) printf '%s\n' "^mihomo-${os_name}-${arch_regex}.*\\.(gz|tgz|tar\\.gz)$" ;;
+        sing-box) printf '%s\n' "^sing-box-.*-${os_name}-${arch_regex}\\.tar\\.gz$" ;;
+        *) printf '%s\n' "${BOX_CORE}.*${os_name}.*${arch_regex}" ;;
+      esac
       ;;
     geo)
       printf '%s\n' "$(basename "${BOX_UPDATER_GEO_TARGET:-geo.dat}")"
@@ -381,6 +389,7 @@ updater_resolve_component() {
   local source_mode="auto" source_ref="" source_name="" checksum_ref="" checksum_name=""
   local release_repo="" release_channel="stable" release_tag="" release_api_url="" asset_regex="" checksum_asset_regex=""
   local release_os="linux" release_arch="" archive_member_regex=""
+  local preset_name="" target_root=""
 
   UP_COMPONENT="${component}"
   UP_SOURCE_REF=""
@@ -394,6 +403,8 @@ updater_resolve_component() {
   UP_INTERVAL=""
   UP_REQUIRES_HANDOFF="false"
   UP_ARCHIVE_MEMBER_REGEX=""
+  UP_PRESET_NAME=""
+  UP_TARGET_ROOT=""
 
   case "${component}" in
     kernel)
@@ -419,6 +430,7 @@ updater_resolve_component() {
       UP_TARGET_PATH="${BOX_UPDATER_SUBS_TARGET:-${BOX_CORE_CONFIG_SOURCE}}"
       UP_INTERVAL="${BOX_UPDATER_SUBS_INTERVAL}"
       UP_REQUIRES_HANDOFF="true"
+      preset_name="${BOX_UPDATER_SUBS_PRESET}"
       ;;
     geo)
       source_mode="${BOX_UPDATER_GEO_SOURCE}"
@@ -427,6 +439,7 @@ updater_resolve_component() {
       UP_TARGET_PATH="${BOX_UPDATER_GEO_TARGET:-${BOX_UPDATER_ARTIFACT_DIR}/geo/geo.dat}"
       UP_INTERVAL="${BOX_UPDATER_GEO_INTERVAL}"
       UP_REQUIRES_HANDOFF="false"
+      preset_name="${BOX_UPDATER_GEO_PRESET}"
       release_repo="${BOX_UPDATER_GEO_RELEASE_REPO}"
       release_channel="${BOX_UPDATER_GEO_RELEASE_CHANNEL}"
       release_tag="${BOX_UPDATER_GEO_RELEASE_TAG}"
@@ -457,13 +470,41 @@ updater_resolve_component() {
 
   case "${source_mode}" in
     auto)
-      if [[ -n "${source_ref}" ]]; then
+      if [[ -n "${source_ref}" || -n "${preset_name}" ]]; then
         :
       elif [[ -n "${release_repo}" || -n "${release_api_url}" ]]; then
         source_mode="release"
       fi
       ;;
   esac
+
+  if [[ "${preset_name}" == "auto" ]]; then
+    preset_name="$(updater_geo_default_preset)"
+  fi
+
+  if [[ -n "${preset_name}" ]]; then
+    case "${component}" in
+      subs)
+        UP_PRESET_NAME="${preset_name}"
+        UP_SOURCE_REF="preset:${preset_name}"
+        UP_SOURCE_NAME="${preset_name}.yaml"
+        UP_SOURCE_KIND="preset-subs"
+        UP_INSTALL_KIND="file"
+        return 0
+        ;;
+      geo)
+        target_root="$(updater_geo_manifest_target_root)"
+        UP_PRESET_NAME="${preset_name}"
+        UP_TARGET_ROOT="${target_root}"
+        UP_TARGET_PATH="${target_root}"
+        UP_SOURCE_REF="preset:${preset_name}"
+        UP_SOURCE_NAME="${preset_name}.bundle"
+        UP_SOURCE_KIND="preset-geo"
+        UP_INSTALL_KIND="directory"
+        return 0
+        ;;
+    esac
+  fi
 
   if [[ "${source_mode}" == "release" ]]; then
     if [[ -z "${release_repo}" ]]; then

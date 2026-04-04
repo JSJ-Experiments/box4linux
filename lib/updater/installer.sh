@@ -7,29 +7,75 @@ set -euo pipefail
 UP_INSTALL_BACKUP=""
 UP_INSTALL_CHANGED="false"
 UP_INSTALL_CHECKSUM=""
+declare -a UP_INSTALL_BACKUP_TARGETS=()
+declare -a UP_INSTALL_BACKUP_PATHS=()
 
 updater_install_reset() {
   UP_INSTALL_BACKUP=""
   UP_INSTALL_CHANGED="false"
   UP_INSTALL_CHECKSUM=""
+  UP_INSTALL_BACKUP_TARGETS=()
+  UP_INSTALL_BACKUP_PATHS=()
 }
 
 updater_restore_backup() {
   local target="${1:?missing target}"
-  if [[ -n "${UP_INSTALL_BACKUP}" && -e "${UP_INSTALL_BACKUP}" ]]; then
-    mkdir -p "$(dirname "${target}")"
-    rm -rf "${target}"
-    mv -f "${UP_INSTALL_BACKUP}" "${target}"
-    UP_INSTALL_BACKUP=""
-  fi
+  local idx backup_path
+  for idx in "${!UP_INSTALL_BACKUP_TARGETS[@]}"; do
+    if [[ "${UP_INSTALL_BACKUP_TARGETS[idx]}" == "${target}" ]]; then
+      backup_path="${UP_INSTALL_BACKUP_PATHS[idx]}"
+      if [[ -n "${backup_path}" && -e "${backup_path}" ]]; then
+        mkdir -p "$(dirname "${target}")"
+        rm -rf "${target}"
+        mv -f "${backup_path}" "${target}"
+      fi
+      unset 'UP_INSTALL_BACKUP_TARGETS[idx]' 'UP_INSTALL_BACKUP_PATHS[idx]'
+      if [[ "${UP_INSTALL_BACKUP}" == "${backup_path}" ]]; then
+        UP_INSTALL_BACKUP=""
+      fi
+      return 0
+    fi
+  done
+}
+
+updater_restore_all_backups() {
+  local idx target backup_path
+  for (( idx=${#UP_INSTALL_BACKUP_TARGETS[@]}-1; idx>=0; idx-- )); do
+    target="${UP_INSTALL_BACKUP_TARGETS[idx]:-}"
+    backup_path="${UP_INSTALL_BACKUP_PATHS[idx]:-}"
+    [[ -n "${target}" && -n "${backup_path}" ]] || continue
+    if [[ -e "${backup_path}" ]]; then
+      mkdir -p "$(dirname "${target}")"
+      rm -rf "${target}"
+      mv -f "${backup_path}" "${target}"
+    fi
+  done
+  UP_INSTALL_BACKUP=""
+  UP_INSTALL_BACKUP_TARGETS=()
+  UP_INSTALL_BACKUP_PATHS=()
+}
+
+updater_discard_backups() {
+  local backup_path
+  for backup_path in "${UP_INSTALL_BACKUP_PATHS[@]}"; do
+    [[ -n "${backup_path}" ]] || continue
+    rm -rf "${backup_path}" 2>/dev/null || true
+  done
+  UP_INSTALL_BACKUP=""
+  UP_INSTALL_BACKUP_TARGETS=()
+  UP_INSTALL_BACKUP_PATHS=()
 }
 
 updater_backup_target() {
   local target="${1:?missing target}"
+  local backup_path
   if [[ -e "${target}" ]]; then
-    UP_INSTALL_BACKUP="${target}.bak.$$"
-    rm -rf "${UP_INSTALL_BACKUP}"
-    mv -f "${target}" "${UP_INSTALL_BACKUP}"
+    backup_path="${target}.bak.$$"
+    rm -rf "${backup_path}"
+    mv -f "${target}" "${backup_path}"
+    UP_INSTALL_BACKUP="${backup_path}"
+    UP_INSTALL_BACKUP_TARGETS+=("${target}")
+    UP_INSTALL_BACKUP_PATHS+=("${backup_path}")
   fi
 }
 

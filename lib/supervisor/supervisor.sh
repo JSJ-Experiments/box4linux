@@ -241,13 +241,18 @@ service_restart() {
 }
 
 service_reload_locked() {
-  local rc=0
+  local rc=0 rendered_path core_bin
+  require_root || return 1
+  load_config
+  init_runtime_paths
+  rendered_path="$(rendered_config_path)"
+  core_bin="$(resolve_core_bin)" || return "${E_CORE_START}"
   case "${BOX_CORE}" in
     mihomo)
-      adapter_mihomo_reload >/dev/null 2>&1 || rc=$?
+      adapter_mihomo_reload "${rendered_path}" "${BOX_CORE_WORKDIR}" "${core_bin}" >/dev/null 2>&1 || rc=$?
       ;;
     sing-box)
-      adapter_sing_box_reload >/dev/null 2>&1 || rc=$?
+      adapter_sing_box_reload "${rendered_path}" "${BOX_CORE_WORKDIR}" "${core_bin}" >/dev/null 2>&1 || rc=$?
       ;;
     *)
       rc="${E_CORE_START}"

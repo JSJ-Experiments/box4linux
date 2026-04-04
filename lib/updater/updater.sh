@@ -4,6 +4,7 @@
 
 set -euo pipefail
 
+source "${BOX_LIB_DIR}/updater/presets.sh"
 source "${BOX_LIB_DIR}/updater/resolver.sh"
 source "${BOX_LIB_DIR}/updater/fetcher.sh"
 source "${BOX_LIB_DIR}/updater/verifier.sh"
@@ -124,7 +125,7 @@ updater_service_running() {
 
 updater_handoff_runtime() {
   local component="${1:?missing component}"
-  local active_bin
+  local active_bin rendered_path core_bin=""
 
   if [[ "${component}" == "dashboard" || "${component}" == "geo" ]]; then
     printf '%s\n' "none"
@@ -145,15 +146,20 @@ updater_handoff_runtime() {
       fi
       ;;
     subs)
+      rendered_path="$(rendered_config_expected_path)"
+      core_bin="$(resolve_core_bin || true)"
       case "${BOX_CORE}" in
         sing-box)
-          if adapter_sing_box_reload; then
+          if [[ -n "${core_bin}" ]] && adapter_sing_box_reload "${rendered_path}" "${BOX_CORE_WORKDIR}" "${core_bin}"; then
             printf '%s\n' "reload"
             return 0
           fi
           ;;
         mihomo)
-          adapter_mihomo_reload >/dev/null 2>&1 || true
+          if [[ -n "${core_bin}" ]] && adapter_mihomo_reload "${rendered_path}" "${BOX_CORE_WORKDIR}" "${core_bin}" >/dev/null 2>&1; then
+            printf '%s\n' "reload"
+            return 0
+          fi
           ;;
       esac
       ;;
@@ -229,7 +235,12 @@ updater_validate_staged_component() {
       rm -f "${rendered_tmp}" "${rendered_tmp}.overlay.env"
       ;;
     geo)
-      if [[ ! -s "${staged_path}" ]]; then
+      if [[ -d "${staged_path}" ]]; then
+        if ! find "${staged_path}" -type f -print -quit | grep -q .; then
+          log "ERROR" "updater" "E_UPDATE_VALIDATE" "geo preset bundle is empty: ${staged_path}"
+          return "${E_UPDATE}"
+        fi
+      elif [[ ! -s "${staged_path}" ]]; then
         log "ERROR" "updater" "E_UPDATE_VALIDATE" "geo artifact is empty: ${staged_path}"
         return "${E_UPDATE}"
       fi
@@ -320,10 +331,102 @@ updater_dashboard_payload_root() {
   printf '%s\n' "${unpack_dir}"
 }
 
+updater_generate_preset_subs() {
+  local output_path="${1:?missing output path}"
+  local template_path=""
+
+  case "${UP_PRESET_NAME}" in
+    mihomo_phone)
+      if [[ -f "${UP_TARGET_PATH}" ]]; then
+        template_path="${UP_TARGET_PATH}"
+      else
+        template_path="$(updater_subs_default_template || true)"
+      fi
+      if [[ -z "${template_path}" ]]; then
+        log "ERROR" "updater" "E_UPDATE_PRESET" "no mihomo phone template available"
+        return "${E_UPDATE}"
+      fi
+      updater_subs_render_mihomo_phone "${template_path}" "${output_path}"
+      ;;
+    *)
+      log "ERROR" "updater" "E_UPDATE_PRESET" "unsupported subs preset: ${UP_PRESET_NAME}"
+      return "${E_UPDATE}"
+      ;;
+  esac
+}
+
+updater_geo_bundle_current_checksum() {
+  local manifest_file="${1:?missing manifest file}"
+  local snapshot_dir snapshot_target snapshot_name
+
+  snapshot_dir="$(mktemp -d)"
+  while IFS=$'\t' read -r snapshot_name _ snapshot_target; do
+    [[ -n "${snapshot_name}" && -n "${snapshot_target}" ]] || continue
+    if [[ ! -f "${snapshot_target}" ]]; then
+      rm -rf "${snapshot_dir}"
+      return 1
+    fi
+    cp -f "${snapshot_target}" "${snapshot_dir}/${snapshot_name}"
+  done <"${manifest_file}"
+
+  updater_compute_tree_sha256 "${snapshot_dir}"
+  rm -rf "${snapshot_dir}"
+}
+
+updater_fetch_geo_bundle() {
+  local bundle_dir="${1:?missing bundle dir}"
+  local manifest_file="${2:?missing manifest file}"
+  local name ref target
+
+  : >"${manifest_file}"
+  while IFS=$'\t' read -r name ref target; do
+    [[ -n "${name}" && -n "${ref}" && -n "${target}" ]] || continue
+    if ! updater_fetch_ref "geo:${name}" "${ref}" "$(updater_source_kind "${ref}")" "${bundle_dir}/${name}"; then
+      log "ERROR" "updater" "E_UPDATE_FETCH" "failed geo preset fetch asset=${name}"
+      return "${E_UPDATE}"
+    fi
+    printf '%s\t%s\t%s\n' "${name}" "${ref}" "${target}" >>"${manifest_file}"
+  done < <(updater_geo_emit_manifest "${UP_PRESET_NAME}" "${UP_TARGET_ROOT}")
+}
+
+updater_install_geo_bundle() {
+  local bundle_dir="${1:?missing bundle dir}"
+  local manifest_file="${2:?missing manifest file}"
+  local source_checksum="${3:-}"
+  local previous_checksum="${4:-}"
+  local current_checksum="" any_changed=0 name source_ref target_path
+
+  if [[ -n "${source_checksum}" && -n "${previous_checksum}" && "${source_checksum}" == "${previous_checksum}" ]]; then
+    current_checksum="$(updater_geo_bundle_current_checksum "${manifest_file}" || true)"
+    if [[ -n "${current_checksum}" && "${current_checksum}" == "${source_checksum}" ]]; then
+      updater_install_nochange "${source_checksum}"
+      return 0
+    fi
+  fi
+
+  while IFS=$'\t' read -r name source_ref target_path; do
+    [[ -n "${name}" && -n "${target_path}" ]] || continue
+    if ! updater_install_file "geo" "${bundle_dir}/${name}" "${target_path}" "false"; then
+      updater_restore_all_backups
+      return "${E_UPDATE}"
+    fi
+    if [[ "${UP_INSTALL_CHANGED}" == "true" ]]; then
+      any_changed=1
+    fi
+  done <"${manifest_file}"
+
+  if [[ "${any_changed}" == "1" ]]; then
+    UP_INSTALL_CHANGED="true"
+  else
+    UP_INSTALL_CHANGED="false"
+  fi
+  UP_INSTALL_CHECKSUM="${source_checksum}"
+}
+
 updater_apply_component() {
   local component="${1:?missing component}"
   local source_basename fetch_output unpack_dir="" install_source="" source_checksum previous_checksum target_checksum handoff result_status
-  local validate_path="" install_path="" target_install_kind=""
+  local validate_path="" install_path="" target_install_kind="" manifest_file=""
 
   if ! updater_resolve_component "${component}"; then
     updater_write_state_component "${component}" "error" "component not configured" "" "" "" "none"
@@ -334,17 +437,37 @@ updater_apply_component() {
   source_basename="${UP_SOURCE_NAME:-$(basename "${UP_SOURCE_REF}")}"
   fetch_output="$(updater_stage_dir "${component}.${source_basename}.download")"
   rm -rf "${fetch_output}"
+  manifest_file="${fetch_output}.manifest"
 
-  if ! updater_fetch_ref "${component}" "${UP_SOURCE_REF}" "${UP_SOURCE_KIND}" "${fetch_output}"; then
-    updater_write_state_component "${component}" "error" "download failed" "${UP_SOURCE_REF}" "${UP_TARGET_PATH}" "" "none"
-    return "${E_UPDATE}"
-  fi
+  case "${UP_SOURCE_KIND}" in
+    preset-subs)
+      if ! updater_generate_preset_subs "${fetch_output}"; then
+        updater_write_state_component "${component}" "error" "preset generation failed" "${UP_SOURCE_REF}" "${UP_TARGET_PATH}" "" "none"
+        return "${E_UPDATE}"
+      fi
+      ;;
+    preset-geo)
+      rm -rf "${fetch_output}"
+      mkdir -p "${fetch_output}"
+      if ! updater_fetch_geo_bundle "${fetch_output}" "${manifest_file}"; then
+        updater_write_state_component "${component}" "error" "download failed" "${UP_SOURCE_REF}" "${UP_TARGET_PATH}" "" "none"
+        updater_cleanup_paths "${fetch_output}" "${manifest_file}"
+        return "${E_UPDATE}"
+      fi
+      ;;
+    *)
+      if ! updater_fetch_ref "${component}" "${UP_SOURCE_REF}" "${UP_SOURCE_KIND}" "${fetch_output}"; then
+        updater_write_state_component "${component}" "error" "download failed" "${UP_SOURCE_REF}" "${UP_TARGET_PATH}" "" "none"
+        return "${E_UPDATE}"
+      fi
 
-  if ! updater_verify_checksum "${component}" "${fetch_output}" "${UP_CHECKSUM_REF}" "${UP_CHECKSUM_KIND}"; then
-    updater_write_state_component "${component}" "error" "checksum verification failed" "${UP_SOURCE_REF}" "${UP_TARGET_PATH}" "" "none"
-    updater_cleanup_paths "${fetch_output}"
-    return "${E_UPDATE}"
-  fi
+      if ! updater_verify_checksum "${component}" "${fetch_output}" "${UP_CHECKSUM_REF}" "${UP_CHECKSUM_KIND}"; then
+        updater_write_state_component "${component}" "error" "checksum verification failed" "${UP_SOURCE_REF}" "${UP_TARGET_PATH}" "" "none"
+        updater_cleanup_paths "${fetch_output}"
+        return "${E_UPDATE}"
+      fi
+      ;;
+  esac
 
   case "${UP_INSTALL_KIND}" in
     file)
@@ -397,7 +520,7 @@ updater_apply_component() {
 
   if ! updater_validate_staged_component "${component}" "${validate_path}"; then
     updater_write_state_component "${component}" "error" "validation failed" "${UP_SOURCE_REF}" "${UP_TARGET_PATH}" "" "none"
-    updater_cleanup_paths "${fetch_output}" "${unpack_dir}"
+    updater_cleanup_paths "${fetch_output}" "${unpack_dir}" "${manifest_file}"
     return "${E_UPDATE}"
   fi
 
@@ -420,37 +543,45 @@ updater_apply_component() {
       if [[ "${UP_INSTALL_CHANGED}" != "false" || -z "${UP_INSTALL_CHECKSUM}" ]]; then
         if ! updater_install_file "${component}" "${install_path}" "${UP_TARGET_PATH}" "$([[ "${component}" == "kernel" ]] && printf 'true' || printf 'false')"; then
           updater_write_state_component "${component}" "error" "install failed" "${UP_SOURCE_REF}" "${UP_TARGET_PATH}" "" "none"
-          updater_cleanup_paths "${fetch_output}" "${unpack_dir}"
+          updater_cleanup_paths "${fetch_output}" "${unpack_dir}" "${manifest_file}"
           return "${E_UPDATE}"
         fi
       fi
-      updater_cleanup_paths "${fetch_output}" "${unpack_dir}"
+      updater_cleanup_paths "${fetch_output}" "${unpack_dir}" "${manifest_file}"
       ;;
     archive-dir)
       if [[ "${UP_INSTALL_CHANGED}" != "false" || -z "${UP_INSTALL_CHECKSUM}" ]]; then
         if ! updater_install_directory "${component}" "${install_path}" "${UP_TARGET_PATH}" "${source_checksum}" "${previous_checksum}"; then
           updater_write_state_component "${component}" "error" "install failed" "${UP_SOURCE_REF}" "${UP_TARGET_PATH}" "" "none"
-          updater_cleanup_paths "${fetch_output}" "${unpack_dir}"
+          updater_cleanup_paths "${fetch_output}" "${unpack_dir}" "${manifest_file}"
           return "${E_UPDATE}"
         fi
       fi
-      updater_cleanup_paths "${fetch_output}" "${unpack_dir}"
+      updater_cleanup_paths "${fetch_output}" "${unpack_dir}" "${manifest_file}"
       ;;
     directory)
-      if [[ "${UP_INSTALL_CHANGED}" != "false" || -z "${UP_INSTALL_CHECKSUM}" ]]; then
-        if ! updater_install_directory "${component}" "${fetch_output}" "${UP_TARGET_PATH}" "${source_checksum}" "${previous_checksum}"; then
+      if [[ "${UP_SOURCE_KIND}" == "preset-geo" ]]; then
+        if ! updater_install_geo_bundle "${fetch_output}" "${manifest_file}" "${source_checksum}" "${previous_checksum}"; then
           updater_write_state_component "${component}" "error" "install failed" "${UP_SOURCE_REF}" "${UP_TARGET_PATH}" "" "none"
-          updater_cleanup_paths "${fetch_output}"
+          updater_cleanup_paths "${fetch_output}" "${manifest_file}"
           return "${E_UPDATE}"
         fi
+      else
+        if [[ "${UP_INSTALL_CHANGED}" != "false" || -z "${UP_INSTALL_CHECKSUM}" ]]; then
+          if ! updater_install_directory "${component}" "${fetch_output}" "${UP_TARGET_PATH}" "${source_checksum}" "${previous_checksum}"; then
+            updater_write_state_component "${component}" "error" "install failed" "${UP_SOURCE_REF}" "${UP_TARGET_PATH}" "" "none"
+            updater_cleanup_paths "${fetch_output}" "${manifest_file}"
+            return "${E_UPDATE}"
+          fi
+        fi
       fi
-      updater_cleanup_paths "${fetch_output}"
+      updater_cleanup_paths "${fetch_output}" "${manifest_file}"
       ;;
   esac
 
   if [[ "${UP_INSTALL_CHANGED}" == "true" && "${UP_REQUIRES_HANDOFF}" == "true" ]]; then
     if ! handoff="$(updater_handoff_runtime "${component}")"; then
-      updater_restore_backup "${UP_TARGET_PATH}"
+      updater_restore_all_backups
       updater_recover_runtime_after_restore "${component}" || true
       updater_write_state_component "${component}" "error" "runtime handoff failed" "${UP_SOURCE_REF}" "${UP_TARGET_PATH}" "${UP_INSTALL_CHECKSUM}" "failed"
       return "${E_UPDATE}"
@@ -463,6 +594,7 @@ updater_apply_component() {
   if [[ "${UP_INSTALL_CHANGED}" != "true" ]]; then
     result_status="unchanged"
   fi
+  updater_discard_backups
   updater_write_state_component "${component}" "${result_status}" "" "${UP_SOURCE_REF}" "${UP_TARGET_PATH}" "${UP_INSTALL_CHECKSUM}" "${handoff}"
   return 0
 }
