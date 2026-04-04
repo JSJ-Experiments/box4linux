@@ -53,6 +53,26 @@ policy_json_array() {
   printf ']'
 }
 
+policy_active_ifaces_json() {
+  local raw item
+  local -a items=()
+
+  raw="$(policy_read_state_value "active_ifaces" || true)"
+  if [[ -z "${raw}" ]]; then
+    printf '[]'
+    return 0
+  fi
+
+  IFS=',' read -r -a items <<<"${raw}"
+  for item in "${items[@]}"; do
+    [[ -n "${item}" ]] || continue
+    policy_json_array "${items[@]}"
+    return 0
+  done
+
+  printf '[]'
+}
+
 policy_write_state() {
   local status="${1:?missing status}"
   local last_event="${2:-}"
@@ -206,14 +226,14 @@ policy_monitor_loop() {
       pending_event="${line}"
       pending_ts="$(timestamp_utc)"
       case "${line}" in
-        *inet*|*inet6*|*address*|*Deleted*) refresh_requested="true" ;;
+        *inet*|*address*|*Deleted*) refresh_requested="true" ;;
       esac
 
       while IFS= read -r -t "${BOX_POLICY_DEBOUNCE_SECONDS}" next_line <&"${POLICY_EVENTS[0]}"; do
         pending_event="${next_line}"
         pending_ts="$(timestamp_utc)"
         case "${next_line}" in
-          *inet*|*inet6*|*address*|*Deleted*) refresh_requested="true" ;;
+          *inet*|*address*|*Deleted*) refresh_requested="true" ;;
         esac
         marker_state="$(if policy_disable_marker_present; then printf 'present'; else printf 'absent'; fi)"
         if [[ "${marker_state}" != "${previous_marker_state}" ]]; then
@@ -346,7 +366,7 @@ policy_status_json() {
     "$(json_pair "applied_state" "$(policy_read_state_value "applied_state" || printf 'unchanged')")" \
     "$(json_pair "proxy_mode" "${BOX_POLICY_PROXY_MODE}")" \
     "$(json_num_pair "debounce_seconds" "${BOX_POLICY_DEBOUNCE_SECONDS}")" \
-    "\"active_ifaces\":$(policy_json_array $(tr ',' ' ' <<<"$(policy_read_state_value "active_ifaces" || true)"))" \
+    "\"active_ifaces\":$(policy_active_ifaces_json)" \
     "$(json_bool_pair "wifi_connected" "$(policy_read_state_value "wifi_connected" || printf 'false')")" \
     "$(json_pair "ssid" "$(policy_read_state_value "ssid" || true)")" \
     "$(json_pair "bssid" "$(policy_read_state_value "bssid" || true)")" \

@@ -19,7 +19,7 @@ Usage:
 Notes:
   - disable/restart actions only manage units and do not delete /etc/box or /var/lib/box.
   - enable starts the core units, conditionally enables policy if configured, and enables the default
-    scheduled updater timer (`box-update-all.timer`).
+    scheduled updater timer (box-update-all.timer).
   - use package removal + manual purge only when full cleanup is explicitly desired.
 USAGE
 }

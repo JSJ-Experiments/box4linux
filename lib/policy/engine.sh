@@ -17,9 +17,9 @@ policy_array_matches() {
   for pattern in "$@"; do
     [[ -n "${pattern}" ]] || continue
     glob="${pattern//+/*}"
-    if [[ "${needle}" == ${glob} ]]; then
-      return 0
-    fi
+    case "${needle}" in
+      ${glob}) return 0 ;;
+    esac
   done
   return 1
 }
