@@ -17,6 +17,7 @@ policy_array_matches() {
   for pattern in "$@"; do
     [[ -n "${pattern}" ]] || continue
     glob="${pattern//+/*}"
+    # shellcheck disable=SC2254
     case "${needle}" in
       ${glob}) return 0 ;;
     esac
