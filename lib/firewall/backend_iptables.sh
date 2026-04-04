@@ -485,8 +485,10 @@ backend_iptables_create_base() {
   backend_iptables_ensure_chain_checked nat "${BOX_CHAIN_DNS_NAT}"
 
   backend_iptables_add_rule_checked mangle PREROUTING -j "${BOX_CHAIN_MANGLE}"
+  backend_iptables_add_rule_checked mangle OUTPUT -m owner --uid-owner 0 -j RETURN
   backend_iptables_add_rule_checked mangle OUTPUT -j "${BOX_CHAIN_MANGLE}"
   backend_iptables_add_rule_checked nat PREROUTING -j "${BOX_CHAIN_NAT}"
+  backend_iptables_add_rule_checked nat OUTPUT -m owner --uid-owner 0 -j RETURN
   backend_iptables_add_rule_checked nat OUTPUT -j "${BOX_CHAIN_NAT}"
 
   backend_iptables_add_rule_checked mangle "${BOX_CHAIN_MANGLE}" -j "${BOX_CHAIN_DNS_MANGLE}"
@@ -563,6 +565,8 @@ backend_iptables_dry_run() {
   printf 'iptables -t mangle -D OUTPUT -j %s\n' "${BOX_CHAIN_MANGLE}"
   printf 'iptables -t nat -D PREROUTING -j %s\n' "${BOX_CHAIN_NAT}"
   printf 'iptables -t nat -D OUTPUT -j %s\n' "${BOX_CHAIN_NAT}"
+  printf 'iptables -t mangle -A OUTPUT -m owner --uid-owner 0 -j RETURN\n'
+  printf 'iptables -t nat -A OUTPUT -m owner --uid-owner 0 -j RETURN\n'
   printf 'iptables -t mangle -N %s ; iptables -t nat -N %s\n' "${BOX_CHAIN_MANGLE}" "${BOX_CHAIN_NAT}"
   printf 'iptables -t mangle -N %s ; iptables -t nat -N %s\n' "${BOX_CHAIN_DNS_MANGLE}" "${BOX_CHAIN_DNS_NAT}"
   printf 'iptables mode rules for %s and dns strategy %s\n' "${mode}" "${BOX_DNS_HIJACK_MODE}"
