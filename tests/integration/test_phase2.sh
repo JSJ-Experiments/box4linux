@@ -66,6 +66,9 @@ write_config() {
   local coexist_mode="${5:-preserve_tailnet}"
   local route_pref="${6:-100}"
   local backend="${7:-iptables}"
+  local firewall_extra="${8:-}"
+  local dns_enhanced_mode="${9:-fake-ip}"
+  local ipv6_enabled="${10:-true}"
   cat >"${CONFIG_FILE}" <<EOF
 [core]
 selected = "${core}"
@@ -79,7 +82,9 @@ tproxy_port = 19898
 redir_port = 19797
 dns_port = 11053
 dns_hijack_mode = "${dns_mode}"
+dns_enhanced_mode = "${dns_enhanced_mode}"
 dns_coexist_mode = "${coexist_mode}"
+ipv6 = ${ipv6_enabled}
 tailscale_iface = "tailscale0"
 tailnet_ipv4_cidr = "100.64.0.0/10"
 tailnet_ipv6_cidr = "fd7a:115c:a1e0::/48"
@@ -92,6 +97,7 @@ backend = "${backend}"
 route_table = 2024
 route_pref = ${route_pref}
 fwmark = "16777216/16777216"
+${firewall_extra}
 EOF
 }
 
@@ -145,6 +151,20 @@ assert_file_contains() {
   if ! grep -Fq "${needle}" "${path}"; then
     printf 'ASSERT FILE CONTAINS FAILED: expected [%s] in %s\n' "${needle}" "${path}" >&2
     cat "${path}" >&2 || true
+    exit 1
+  fi
+}
+
+assert_line_order() {
+  local haystack="${1:?missing haystack}"
+  local first="${2:?missing first needle}"
+  local second="${3:?missing second needle}"
+  local first_line second_line
+  first_line="$(printf '%s\n' "${haystack}" | nl -ba | awk -v needle="${first}" 'index($0, needle) { print $1; exit }')"
+  second_line="$(printf '%s\n' "${haystack}" | nl -ba | awk -v needle="${second}" 'index($0, needle) { print $1; exit }')"
+  if [[ -z "${first_line}" || -z "${second_line}" || "${first_line}" -ge "${second_line}" ]]; then
+    printf 'ASSERT ORDER FAILED: expected [%s] before [%s]\n' "${first}" "${second}" >&2
+    printf '%s\n' "${haystack}" >&2
     exit 1
   fi
 }
@@ -340,8 +360,15 @@ run_firewall_mode_case() {
   assert_contains "${status_json}" "\"backend_capabilities\":"
   assert_contains "${status_json}" "\"backend_available\":true"
   assert_contains "${status_json}" "\"dns_hijack_mode\":\"${dns_mode}\""
+  assert_contains "${status_json}" "\"dns_enhanced_mode\":\"fake-ip\""
   assert_contains "${status_json}" "\"dns_coexist_mode\":\"${coexist_mode}\""
   assert_contains "${status_json}" "\"dns_coexist_mode_active\":\"${coexist_mode}\""
+  assert_contains "${status_json}" "\"ipv6_enabled\":true"
+  if [[ "${mode}" == "tun" ]]; then
+    assert_contains "${status_json}" "\"ipv6_effective_mode\":\"proxied\""
+  else
+    assert_contains "${status_json}" "\"ipv6_effective_mode\":\"direct\""
+  fi
   assert_contains "${status_json}" "\"cap_ipv4\":true"
   assert_contains "${status_json}" "\"cap_ipv6\":false"
   assert_contains "${status_json}" "\"dry_run_supported\":true"
@@ -364,25 +391,25 @@ run_firewall_mode_case() {
   assert_no_box_artifacts
 }
 
-printf '[1/11] firewall mode/dns apply+renew+disable idempotency (preserve_tailnet)\n'
+printf '[1/13] firewall mode/dns apply+renew+disable idempotency (preserve_tailnet)\n'
 run_firewall_mode_case "tun" "disable" "preserve_tailnet" "100" "iptables"
 run_firewall_mode_case "tproxy" "tproxy" "preserve_tailnet" "100" "iptables"
 run_firewall_mode_case "redirect" "redirect" "preserve_tailnet" "100" "iptables"
 run_firewall_mode_case "mixed" "tproxy" "preserve_tailnet" "100" "iptables"
 run_firewall_mode_case "enhance" "redirect" "preserve_tailnet" "100" "iptables"
 
-printf '[2/11] nftables backend mode/dns apply+renew+disable idempotency (preserve_tailnet)\n'
+printf '[2/13] nftables backend mode/dns apply+renew+disable idempotency (preserve_tailnet)\n'
 run_firewall_mode_case "tun" "disable" "preserve_tailnet" "100" "nftables"
 run_firewall_mode_case "tproxy" "tproxy" "preserve_tailnet" "100" "nftables"
 run_firewall_mode_case "redirect" "redirect" "preserve_tailnet" "100" "nftables"
 run_firewall_mode_case "mixed" "tproxy" "preserve_tailnet" "100" "nftables"
 run_firewall_mode_case "enhance" "redirect" "preserve_tailnet" "100" "nftables"
 
-printf '[3/11] coexist mode strict_box rule differences\n'
+printf '[3/13] coexist mode strict_box rule differences\n'
 run_firewall_mode_case "tproxy" "tproxy" "strict_box" "100" "iptables"
 run_firewall_mode_case "tproxy" "tproxy" "strict_box" "100" "nftables"
 
-printf '[4/11] route_pref convergence across renew\n'
+printf '[4/13] route_pref convergence across renew\n'
 write_config "mihomo" "tproxy" "tproxy" "${MIHOMO_SOURCE}" "preserve_tailnet" "100" "iptables"
 seed_tailscale_state
 must_run firewall enable >/dev/null
@@ -394,13 +421,28 @@ must_run firewall disable >/dev/null
 assert_tailscale_state_preserved
 assert_no_box_artifacts
 
-printf '[5/11] firewall dry-run surfaces intended operations\n'
-write_config "mihomo" "tproxy" "tproxy" "${MIHOMO_SOURCE}" "preserve_tailnet" "100" "nftables"
+printf '[5/13] firewall dry-run surfaces intended operations\n'
+cn_bypass_file="${TMP_DIR}/china_ipv4.txt"
+cat >"${cn_bypass_file}" <<'EOF_CN'
+1.1.0.0/16
+101.6.0.0/16
+EOF_CN
+write_config "mihomo" "tproxy" "tproxy" "${MIHOMO_SOURCE}" "preserve_tailnet" "100" "nftables" \
+"bypass_private_ip = true
+bypass_cn_ip = true
+bypass_cn_file = \"${cn_bypass_file}\""
 dryrun_output="$(must_run firewall dry-run)"
 assert_contains "${dryrun_output}" "dry-run"
 assert_contains "${dryrun_output}" "backend=nftables"
+assert_contains "${dryrun_output}" "add set inet box_mangle box_private_v4"
+assert_contains "${dryrun_output}" "add set inet box_mangle box_cn_v4"
+assert_contains "${dryrun_output}" "add rule inet box_mangle box_main ip daddr @box_private_v4 return"
+assert_contains "${dryrun_output}" "add rule inet box_mangle box_main ip daddr @box_cn_v4 return"
+assert_contains "${dryrun_output}" "add rule ip box_nat box_main ip daddr @box_cn_v4 return"
+assert_line_order "${dryrun_output}" "add rule inet box_mangle box_main ip daddr @box_cn_v4 return" 'add rule inet box_mangle box_main return comment "BOX_POLICY_PLACEHOLDER"'
+assert_line_order "${dryrun_output}" "meta mark set 16777216" 'add rule inet box_mangle box_main return comment "BOX_POLICY_PLACEHOLDER"'
 
-printf '[6/11] trace mode logs external commands with action context\n'
+printf '[6/13] trace mode logs external commands with action context\n'
 BOX_TRACE_COMMANDS=1
 export BOX_TRACE_COMMANDS
 trace_output="$(must_run firewall status --json)"
@@ -409,7 +451,7 @@ assert_contains "${trace_output}" "event_id=TRACE_CMD"
 assert_contains "${trace_output}" "action=status"
 assert_contains "${trace_output}" "cmd="
 
-printf '[7/11] explicit BOX_CONFIG_FILE missing fails fast\n'
+printf '[7/13] explicit BOX_CONFIG_FILE missing fails fast\n'
 missing_cfg="${TMP_DIR}/missing-explicit-box.toml"
 BOX_CONFIG_FILE="${missing_cfg}"
 export BOX_CONFIG_FILE
@@ -418,7 +460,7 @@ assert_contains "${fail_output}" "explicit BOX_CONFIG_FILE does not exist"
 BOX_CONFIG_FILE="${CONFIG_FILE}"
 export BOX_CONFIG_FILE
 
-printf '[8/11] status json conditional error field\n'
+printf '[8/13] status json conditional error field\n'
 write_config "mihomo" "tun" "disable" "${MIHOMO_SOURCE}" "preserve_tailnet" "100" "iptables"
 saved_iptables_cmd="${BOX_IPTABLES_CMD}"
 BOX_IPTABLES_CMD="${TMP_DIR}/missing-iptables"
@@ -429,7 +471,25 @@ assert_contains "${error_status_json}" "\"error\":\"iptables inspection unavaila
 BOX_IPTABLES_CMD="${saved_iptables_cmd}"
 export BOX_IPTABLES_CMD
 
-printf '[9/11] service status side-effect free\n'
+printf '[9/13] kernel bypass rules apply in iptables backend\n'
+write_config "mihomo" "mixed" "redirect" "${MIHOMO_SOURCE}" "preserve_tailnet" "100" "iptables" \
+"bypass_private_ip = true
+bypass_cn_ip = true
+bypass_cn_file = \"${cn_bypass_file}\""
+seed_tailscale_state
+must_run firewall enable >/dev/null
+assert_contains "$(cat "${MOCK_IPTABLES_STATE}")" 'RULE|mangle|BOX_MANGLE|-d 10.0.0.0/8 -j RETURN'
+assert_contains "$(cat "${MOCK_IPTABLES_STATE}")" 'RULE|nat|BOX_NAT|-d 10.0.0.0/8 -j RETURN'
+assert_contains "$(cat "${MOCK_IPTABLES_STATE}")" 'RULE|mangle|BOX_MANGLE|-d 1.1.0.0/16 -j RETURN'
+assert_contains "$(cat "${MOCK_IPTABLES_STATE}")" 'RULE|nat|BOX_NAT|-d 101.6.0.0/16 -j RETURN'
+status_json="$(must_run firewall status --json)"
+assert_contains "${status_json}" "\"bypass_private_ip\":true"
+assert_contains "${status_json}" "\"bypass_cn_ip\":true"
+assert_contains "${status_json}" "\"bypass_cn_file\":\"${cn_bypass_file}\""
+must_run firewall disable >/dev/null
+assert_no_box_artifacts
+
+printf '[10/13] service status side-effect free\n'
 write_config "mihomo" "tun" "disable" "${MIHOMO_SOURCE}" "preserve_tailnet" "100" "iptables"
 rm -rf "${BOX_RUN_DIR}/rendered"
 must_run service status --json >/dev/null
@@ -438,7 +498,7 @@ if [[ -d "${BOX_RUN_DIR}/rendered" ]]; then
   exit 1
 fi
 
-printf '[10/12] service lifecycle + mihomo overlay\n'
+printf '[11/15] service lifecycle + mihomo overlay\n'
 write_config "mihomo" "mixed" "redirect" "${MIHOMO_SOURCE}" "preserve_tailnet" "100" "iptables"
 seed_tailscale_state
 mihomo_checksum_before="$(sha256sum "${MIHOMO_SOURCE}" | awk '{print $1}')"
@@ -447,6 +507,9 @@ assert_tailscale_state_preserved
 service_json="$(must_run service status --json)"
 assert_contains "${service_json}" "\"status\":\"healthy\""
 assert_contains "${service_json}" "\"core\":\"mihomo\""
+assert_contains "${service_json}" "\"dns_enhanced_mode\":\"fake-ip\""
+assert_contains "${service_json}" "\"ipv6_enabled\":true"
+assert_contains "${service_json}" "\"ipv6_effective_mode\":\"direct\""
 assert_contains "${service_json}" "/rendered/mihomo/config.yaml"
 assert_file_exists "${BOX_RUN_DIR}/rendered/mihomo/config.yaml"
 assert_file_contains "${BOX_RUN_DIR}/rendered/mihomo/config.yaml" 'mixed-port: 7890'
@@ -457,6 +520,10 @@ assert_file_contains "${BOX_RUN_DIR}/rendered/mihomo/config.yaml" '  enable: fal
 assert_file_contains "${BOX_RUN_DIR}/rendered/mihomo/config.yaml" '  auto-route: false'
 assert_file_contains "${BOX_RUN_DIR}/rendered/mihomo/config.yaml" '  auto-redirect: false'
 assert_file_contains "${BOX_RUN_DIR}/rendered/mihomo/config.yaml" '  strict-route: false'
+assert_file_contains "${BOX_RUN_DIR}/rendered/mihomo/config.yaml" 'ipv6: true'
+assert_file_contains "${BOX_RUN_DIR}/rendered/mihomo/config.yaml" '  ipv6: true'
+assert_file_contains "${BOX_RUN_DIR}/rendered/mihomo/config.yaml" '  enhanced-mode: fake-ip'
+assert_file_contains "${BOX_RUN_DIR}/rendered/mihomo/config.yaml" '  fake-ip-range6: "fc00::/18"'
 assert_file_contains "${BOX_RUN_DIR}/rendered/mihomo/config.yaml" '"+.tailscale.com"'
 assert_file_contains "${BOX_RUN_DIR}/rendered/mihomo/config.yaml" '"+.ts.net"'
 mihomo_checksum_after="$(sha256sum "${MIHOMO_SOURCE}" | awk '{print $1}')"
@@ -475,7 +542,7 @@ assert_tailscale_state_preserved
 service_json="$(must_run service status --json)"
 assert_contains "${service_json}" "\"status\":\"stopped\""
 
-printf '[11/12] strict_box mihomo overlay omits tailscale fake-ip filter bypass\n'
+printf '[12/15] strict_box mihomo overlay omits tailscale fake-ip filter bypass\n'
 write_config "mihomo" "mixed" "redirect" "${MIHOMO_SOURCE}" "strict_box" "100" "iptables"
 must_run service start >/dev/null
 assert_file_exists "${BOX_RUN_DIR}/rendered/mihomo/config.yaml"
@@ -486,7 +553,7 @@ if grep -Fq '"+.tailscale.com"' "${BOX_RUN_DIR}/rendered/mihomo/config.yaml" || 
 fi
 must_run service stop >/dev/null
 
-printf '[12/12] service lifecycle + sing-box overlay\n'
+printf '[13/15] service lifecycle + sing-box overlay\n'
 write_config "sing-box" "tproxy" "tproxy" "${SING_SOURCE}" "preserve_tailnet" "100" "iptables"
 seed_tailscale_state
 sing_checksum_before="$(sha256sum "${SING_SOURCE}" | awk '{print $1}')"
@@ -504,5 +571,29 @@ fi
 must_run service stop >/dev/null
 assert_tailscale_state_preserved
 assert_no_box_artifacts
+
+printf '[14/15] mihomo overlay honors ipv6 disable and redir-host\n'
+write_config "mihomo" "mixed" "redirect" "${MIHOMO_SOURCE}" "preserve_tailnet" "100" "iptables" "" \
+"redir-host" "false"
+must_run service start >/dev/null
+service_json="$(must_run service status --json)"
+assert_contains "${service_json}" "\"dns_enhanced_mode\":\"redir-host\""
+assert_contains "${service_json}" "\"ipv6_enabled\":false"
+assert_contains "${service_json}" "\"ipv6_effective_mode\":\"disabled\""
+assert_file_contains "${BOX_RUN_DIR}/rendered/mihomo/config.yaml" 'ipv6: false'
+assert_file_contains "${BOX_RUN_DIR}/rendered/mihomo/config.yaml" '  ipv6: false'
+assert_file_contains "${BOX_RUN_DIR}/rendered/mihomo/config.yaml" '  enhanced-mode: redir-host'
+if grep -Fq '"+.tailscale.com"' "${BOX_RUN_DIR}/rendered/mihomo/config.yaml"; then
+  printf 'ASSERT REDIR-HOST OVERLAY FAILED: fake-ip filter bypass unexpectedly present\n' >&2
+  exit 1
+fi
+must_run service stop >/dev/null
+
+printf '[15/15] tun mode reports proxied ipv6 intent\n'
+write_config "mihomo" "tun" "disable" "${MIHOMO_SOURCE}" "preserve_tailnet" "100" "iptables"
+must_run service start >/dev/null
+service_json="$(must_run service status --json)"
+assert_contains "${service_json}" "\"ipv6_effective_mode\":\"proxied\""
+must_run service stop >/dev/null
 
 printf 'PASS: integration phase2 checks completed\n'

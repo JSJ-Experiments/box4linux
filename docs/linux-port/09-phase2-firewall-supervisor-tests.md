@@ -73,8 +73,11 @@
   - `backend_available`
   - `mode`
   - `dns_hijack_mode`
+  - `dns_enhanced_mode`
   - `dns_coexist_mode`
   - `dns_coexist_mode_active`
+  - `ipv6_enabled`
+  - `ipv6_effective_mode`
   - `cap_ipv4`, `cap_ipv6`, `cap_tproxy`
   - `dry_run_supported`
   - `last_error`
@@ -84,22 +87,22 @@
 ## Status JSON Contract
 
 - `boxctl service status --json`
-  - required fields: `status`, `core`, `pid`, `mode`, `dns_hijack_mode`, `rendered_config`, `config`
+  - required fields: `status`, `core`, `pid`, `mode`, `dns_hijack_mode`, `dns_enhanced_mode`, `ipv6_enabled`, `ipv6_effective_mode`, `rendered_config`, `config`
   - conditional fields: none
   - healthy example:
 ```json
-{"status":"healthy","core":"mihomo","pid":1234,"mode":"mixed","dns_hijack_mode":"redirect","rendered_config":"/run/box/rendered/mihomo/config.yaml","config":"/etc/box/box.toml"}
+{"status":"healthy","core":"mihomo","pid":1234,"mode":"mixed","dns_hijack_mode":"redirect","dns_enhanced_mode":"fake-ip","ipv6_enabled":true,"ipv6_effective_mode":"direct","rendered_config":"/run/box/rendered/mihomo/config.yaml","config":"/etc/box/box.toml"}
 ```
 - `boxctl firewall status --json`
-  - required fields: `status`, `mode`, `backend`, `backend_selected`, `dns_hijack_mode`, `dns_coexist_mode`, `dns_coexist_mode_active`, `backend_capabilities`, `last_error`, `backend_available`, `cap_tproxy`, `cap_ipv4`, `cap_ipv6`, `dry_run_supported`, `tailscale_bypass_applied`, `tailscale_mark_rule`, `tailscale_table_present`, `chain_mangle`, `chain_nat`, `chain_dns_mangle`, `chain_dns_nat`, `route_rule`, `route_table_installed`
+  - required fields: `status`, `mode`, `backend`, `backend_selected`, `dns_hijack_mode`, `dns_enhanced_mode`, `dns_coexist_mode`, `dns_coexist_mode_active`, `ipv6_enabled`, `ipv6_effective_mode`, `backend_capabilities`, `last_error`, `backend_available`, `cap_tproxy`, `cap_ipv4`, `cap_ipv6`, `dry_run_supported`, `tailscale_bypass_applied`, `tailscale_mark_rule`, `tailscale_table_present`, `chain_mangle`, `chain_nat`, `chain_dns_mangle`, `chain_dns_nat`, `route_rule`, `route_table_installed`
   - conditional fields: `error` is emitted only when `last_error` is non-empty
   - healthy example:
 ```json
-{"status":"enabled","mode":"mixed","backend":"iptables","backend_selected":"iptables","dns_hijack_mode":"redirect","dns_coexist_mode":"preserve_tailnet","dns_coexist_mode_active":"preserve_tailnet","backend_capabilities":"backend=iptables,available=true,ipv4=true,ipv6=false,tproxy=true,dry_run=true","last_error":"","backend_available":true,"cap_tproxy":true,"cap_ipv4":true,"cap_ipv6":false,"dry_run_supported":true,"tailscale_bypass_applied":true,"tailscale_mark_rule":true,"tailscale_table_present":true,"chain_mangle":true,"chain_nat":true,"chain_dns_mangle":true,"chain_dns_nat":true,"route_rule":true,"route_table_installed":true}
+{"status":"enabled","mode":"mixed","backend":"iptables","backend_selected":"iptables","dns_hijack_mode":"redirect","dns_enhanced_mode":"fake-ip","dns_coexist_mode":"preserve_tailnet","dns_coexist_mode_active":"preserve_tailnet","ipv6_enabled":true,"ipv6_effective_mode":"direct","backend_capabilities":"backend=iptables,available=true,ipv4=true,ipv6=false,tproxy=true,dry_run=true","last_error":"","backend_available":true,"cap_tproxy":true,"cap_ipv4":true,"cap_ipv6":false,"dry_run_supported":true,"tailscale_bypass_applied":true,"tailscale_mark_rule":true,"tailscale_table_present":true,"chain_mangle":true,"chain_nat":true,"chain_dns_mangle":true,"chain_dns_nat":true,"route_rule":true,"route_table_installed":true}
 ```
   - error example:
 ```json
-{"status":"disabled","mode":"tun","backend":"iptables","backend_selected":"iptables","dns_hijack_mode":"disable","dns_coexist_mode":"preserve_tailnet","dns_coexist_mode_active":"preserve_tailnet","backend_capabilities":"backend=iptables,available=false,ipv4=false,ipv6=false,tproxy=false,dry_run=true","last_error":"iptables inspection unavailable (need root/CAP_NET_ADMIN or kernel support)","backend_available":false,"cap_tproxy":false,"cap_ipv4":false,"cap_ipv6":false,"dry_run_supported":true,"tailscale_bypass_applied":false,"tailscale_mark_rule":false,"tailscale_table_present":false,"chain_mangle":false,"chain_nat":false,"chain_dns_mangle":false,"chain_dns_nat":false,"route_rule":false,"route_table_installed":false,"error":"iptables inspection unavailable (need root/CAP_NET_ADMIN or kernel support)"}
+{"status":"disabled","mode":"tun","backend":"iptables","backend_selected":"iptables","dns_hijack_mode":"disable","dns_enhanced_mode":"redir-host","dns_coexist_mode":"preserve_tailnet","dns_coexist_mode_active":"preserve_tailnet","ipv6_enabled":false,"ipv6_effective_mode":"disabled","backend_capabilities":"backend=iptables,available=false,ipv4=false,ipv6=false,tproxy=false,dry_run=true","last_error":"iptables inspection unavailable (need root/CAP_NET_ADMIN or kernel support)","backend_available":false,"cap_tproxy":false,"cap_ipv4":false,"cap_ipv6":false,"dry_run_supported":true,"tailscale_bypass_applied":false,"tailscale_mark_rule":false,"tailscale_table_present":false,"chain_mangle":false,"chain_nat":false,"chain_dns_mangle":false,"chain_dns_nat":false,"route_rule":false,"route_table_installed":false,"error":"iptables inspection unavailable (need root/CAP_NET_ADMIN or kernel support)"}
 ```
 
 ## Real-Kernel Validation
@@ -139,4 +142,4 @@
 - UID/GID/interface/MAC policy filters are placeholders.
 - nftables IPv6-specific tailnet chain rules are pending.
 - Kernel feature probing remains lightweight (tool-level + basic tproxy probe).
-- API reload is still TODO for both cores.
+- API reload is implemented when the active rendered config exposes a controller endpoint; restart fallback remains in place for unsupported cases.

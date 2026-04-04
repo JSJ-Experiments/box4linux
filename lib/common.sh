@@ -276,7 +276,15 @@ try_lock() {
 
 is_pid_alive() {
   local pid="${1:-}"
-  [[ -n "${pid}" ]] && kill -0 "${pid}" 2>/dev/null
+  local proc_state=""
+  [[ -n "${pid}" ]] || return 1
+  if [[ -e "/proc/${pid}" && -r "/proc/${pid}/stat" ]]; then
+    proc_state="$(awk '{print $3}' "/proc/${pid}/stat" 2>/dev/null || true)"
+    [[ "${proc_state}" != "Z" ]] || return 1
+    return 0
+  fi
+
+  kill -0 "${pid}" 2>/dev/null
 }
 
 read_pid_file() {

@@ -5,13 +5,13 @@
 set -euo pipefail
 
 adapter_mihomo_resolve_bin() {
-  if command -v mihomo >/dev/null 2>&1; then
-    command -v mihomo
+  if [[ -x "${BOX_CORE_BIN_DIR}/mihomo" ]]; then
+    printf '%s\n' "${BOX_CORE_BIN_DIR}/mihomo"
     return 0
   fi
 
-  if [[ -x "${BOX_CORE_BIN_DIR}/mihomo" ]]; then
-    printf '%s\n' "${BOX_CORE_BIN_DIR}/mihomo"
+  if command -v mihomo >/dev/null 2>&1; then
+    command -v mihomo
     return 0
   fi
 

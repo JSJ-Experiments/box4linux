@@ -174,7 +174,11 @@ Packaged first-run defaults:
 - `/etc/box/box.toml` already points `config_source` at `/etc/box/profiles/phone-mihomo-config.yml`
 - default `bin_dir` is `/usr/bin`
 - default runtime mode is `mixed` with `dns_hijack_mode = "redirect"`
+- default Mihomo DNS mode is `fake-ip`
+- default runtime IPv6 is enabled
 - default firewall backend is `nftables`
+- default private-range kernel bypass is enabled
+- optional CN kernel bypass reads `/var/lib/box/china_ipv4.txt`
 - `updater.geo.preset = "auto"` is enabled by default
 - `updater.subs.target` already points at the shipped Mihomo profile
 - you can either edit the shipped Mihomo profile directly or enable `updater.subs.preset = "mihomo_phone"` in `box.toml`
@@ -207,6 +211,7 @@ Manual equivalent:
 4. Materialize optional managed assets:
    - `sudo boxctl update geo`
    - `sudo boxctl update dashboard`
+   - if you enable `firewall.bypass_cn_ip = true`, `update geo` populates `/var/lib/box/china_ipv4.txt` for kernel-side CN bypass
 5. Start runtime:
    - `sudo systemctl start box.service`
 6. Renew firewall policy safely:
@@ -244,6 +249,17 @@ On tags (`v*`):
 - Coexistence modes:
   - `preserve_tailnet` (default): apply tailscale and MagicDNS bypasses
   - `strict_box`: skip tailscale/MagicDNS bypass insertion
+- Kernel bypass:
+  - `firewall.bypass_private_ip = true` installs early private-range bypass rules by default
+  - `firewall.bypass_cn_ip = true` installs early CN IPv4 bypass rules from `firewall.bypass_cn_file`
+  - `boxctl update geo` with the default preset now ships `china_ipv4.txt` alongside geo assets
+- IPv6 and DNS controls:
+  - `network.ipv6 = true|false` controls whether Mihomo and its DNS answer IPv6 at all
+  - `network.dns_enhanced_mode = "fake-ip" | "redir-host"` controls Mihomo DNS behavior
+  - effective IPv6 behavior today is:
+    - `mode = "tun"` and `ipv6 = true`: IPv6 is proxied by the core TUN stack
+    - `mode != "tun"` and `ipv6 = true`: IPv6 stays direct outside the Linux firewall graph
+    - `ipv6 = false`: runtime disables IPv6 in the core/DNS path so clients prefer IPv4
 - Route convergence: renew/reapply prunes stale BOX fwmark rules and enforces one current `route_pref` rule
 - Idempotent + lock-protected: `enable|renew|disable`
 - `BOX_TRACE_COMMANDS=1` logs external command executions with component/action context
@@ -270,6 +286,6 @@ Optional manual purge of local state:
 ## Remaining TODO
 
 - Full UID/GID/interface/MAC policy graph in firewall.
-- Full IPv6 interception/hijack parity.
+- Full IPv6 firewall interception/hijack parity outside `tun` mode.
 - Richer built-in geo/subscription preset coverage beyond the default Mihomo phone and MetaCubeX bundles.
 - Broader kernel-capability probing across distro variants.

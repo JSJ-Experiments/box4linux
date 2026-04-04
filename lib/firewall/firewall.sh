@@ -7,6 +7,63 @@ set -euo pipefail
 source "${BOX_LIB_DIR}/firewall/backend_iptables.sh"
 source "${BOX_LIB_DIR}/firewall/backend_nft.sh"
 
+firewall_bool_enabled() {
+  case "${1:-}" in
+    true|1) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+firewall_ipv6_effective_mode() {
+  if ! firewall_bool_enabled "${BOX_IPV6_ENABLED:-false}"; then
+    printf 'disabled\n'
+    return 0
+  fi
+
+  if [[ "${BOX_NETWORK_MODE}" == "tun" ]]; then
+    printf 'proxied\n'
+  else
+    printf 'direct\n'
+  fi
+}
+
+firewall_private_ipv4_cidrs() {
+  cat <<'EOF'
+0.0.0.0/8
+10.0.0.0/8
+127.0.0.0/8
+169.254.0.0/16
+172.16.0.0/12
+192.168.0.0/16
+224.0.0.0/4
+240.0.0.0/4
+EOF
+}
+
+firewall_load_cn_ipv4_cidrs() {
+  local cidr_file="${BOX_BYPASS_CN_FILE:-}"
+
+  firewall_bool_enabled "${BOX_BYPASS_CN_IP:-false}" || return 0
+
+  if [[ -z "${cidr_file}" || ! -f "${cidr_file}" ]]; then
+    FW_LAST_ERROR="CN bypass CIDR file missing: ${cidr_file:-unset}"
+    return "${E_FIREWALL_APPLY}"
+  fi
+
+  awk '
+    /^[[:space:]]*#/ { next }
+    /^[[:space:]]*$/ { next }
+    {
+      line = $0
+      sub(/[[:space:]]+#.*$/, "", line)
+      gsub(/^[[:space:]]+|[[:space:]]+$/, "", line)
+      if (line ~ /^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+\/[0-9]+$/) {
+        print line
+      }
+    }
+  ' "${cidr_file}" | sort -u
+}
+
 firewall_state_file() {
   init_runtime_paths
   printf '%s/firewall.state\n' "${BOX_RUN_DIR}"
@@ -26,6 +83,9 @@ dns_coexist_mode=${BOX_DNS_COEXIST_MODE}
 route_table=${BOX_ROUTE_TABLE}
 route_pref=${BOX_ROUTE_PREF}
 fwmark=${BOX_FWMARK}
+bypass_private_ip=${BOX_BYPASS_PRIVATE_IP}
+bypass_cn_ip=${BOX_BYPASS_CN_IP}
+bypass_cn_file=${BOX_BYPASS_CN_FILE}
 tailscale_iface=${BOX_TAILSCALE_IFACE}
 tailscale_dns_resolver=${BOX_TAILSCALE_DNS_RESOLVER}
 tailscale_fwmark=${BOX_TAILSCALE_FWMARK}
@@ -164,8 +224,14 @@ firewall_status_text() {
   printf 'backend_selected=%s\n' "${BOX_FIREWALL_BACKEND}"
   printf 'backend_available=%s\n' "${FW_BACKEND_AVAILABLE}"
   printf 'dns_hijack_mode=%s\n' "${BOX_DNS_HIJACK_MODE}"
+  printf 'dns_enhanced_mode=%s\n' "${BOX_DNS_ENHANCED_MODE}"
   printf 'dns_coexist_mode=%s\n' "${BOX_DNS_COEXIST_MODE}"
   printf 'dns_coexist_mode_active=%s\n' "${FW_DNS_COEXIST_MODE_ACTIVE}"
+  printf 'ipv6_enabled=%s\n' "${BOX_IPV6_ENABLED}"
+  printf 'ipv6_effective_mode=%s\n' "$(firewall_ipv6_effective_mode)"
+  printf 'bypass_private_ip=%s\n' "${BOX_BYPASS_PRIVATE_IP}"
+  printf 'bypass_cn_ip=%s\n' "${BOX_BYPASS_CN_IP}"
+  printf 'bypass_cn_file=%s\n' "${BOX_BYPASS_CN_FILE}"
   printf 'tailscale_iface=%s\n' "${BOX_TAILSCALE_IFACE}"
   printf 'tailscale_dns_resolver=%s\n' "${BOX_TAILSCALE_DNS_RESOLVER}"
   printf 'tailscale_fwmark=%s\n' "${BOX_TAILSCALE_FWMARK}"
@@ -201,8 +267,14 @@ firewall_status_json() {
     "$(json_pair "backend" "${BOX_FIREWALL_BACKEND}")"
     "$(json_pair "backend_selected" "${BOX_FIREWALL_BACKEND}")"
     "$(json_pair "dns_hijack_mode" "${BOX_DNS_HIJACK_MODE}")"
+    "$(json_pair "dns_enhanced_mode" "${BOX_DNS_ENHANCED_MODE}")"
     "$(json_pair "dns_coexist_mode" "${BOX_DNS_COEXIST_MODE}")"
     "$(json_pair "dns_coexist_mode_active" "${FW_DNS_COEXIST_MODE_ACTIVE}")"
+    "$(json_bool_pair "ipv6_enabled" "${BOX_IPV6_ENABLED}")"
+    "$(json_pair "ipv6_effective_mode" "$(firewall_ipv6_effective_mode)")"
+    "$(json_bool_pair "bypass_private_ip" "${BOX_BYPASS_PRIVATE_IP}")"
+    "$(json_bool_pair "bypass_cn_ip" "${BOX_BYPASS_CN_IP}")"
+    "$(json_pair "bypass_cn_file" "${BOX_BYPASS_CN_FILE}")"
     "$(json_pair "tailscale_iface" "${BOX_TAILSCALE_IFACE}")"
     "$(json_pair "tailscale_dns_resolver" "${BOX_TAILSCALE_DNS_RESOLVER}")"
     "$(json_pair "tailscale_fwmark" "${BOX_TAILSCALE_FWMARK}")"
