@@ -42,6 +42,11 @@ export BOX_CONFIG_FILE="${CONFIG_FILE}"
 cat >"${MIHOMO_SOURCE}" <<'EOF'
 mode: rule
 mixed-port: 7890
+tun:
+  enable: true
+  auto-route: true
+  auto-redirect: true
+  strict-route: true
 rules:
   - MATCH,DIRECT
 EOF
@@ -447,6 +452,11 @@ assert_file_exists "${BOX_RUN_DIR}/rendered/mihomo/config.yaml"
 assert_file_contains "${BOX_RUN_DIR}/rendered/mihomo/config.yaml" 'mixed-port: 7890'
 assert_file_contains "${BOX_RUN_DIR}/rendered/mihomo/config.yaml" 'redir-port: 19797'
 assert_file_contains "${BOX_RUN_DIR}/rendered/mihomo/config.yaml" 'tproxy-port: 19898'
+assert_file_contains "${BOX_RUN_DIR}/rendered/mihomo/config.yaml" 'tun:'
+assert_file_contains "${BOX_RUN_DIR}/rendered/mihomo/config.yaml" '  enable: false'
+assert_file_contains "${BOX_RUN_DIR}/rendered/mihomo/config.yaml" '  auto-route: false'
+assert_file_contains "${BOX_RUN_DIR}/rendered/mihomo/config.yaml" '  auto-redirect: false'
+assert_file_contains "${BOX_RUN_DIR}/rendered/mihomo/config.yaml" '  strict-route: false'
 assert_file_contains "${BOX_RUN_DIR}/rendered/mihomo/config.yaml" '"+.tailscale.com"'
 assert_file_contains "${BOX_RUN_DIR}/rendered/mihomo/config.yaml" '"+.ts.net"'
 mihomo_checksum_after="$(sha256sum "${MIHOMO_SOURCE}" | awk '{print $1}')"

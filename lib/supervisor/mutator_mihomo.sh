@@ -26,6 +26,70 @@ yaml_set_scalar_if_missing() {
   fi
 }
 
+yaml_set_section_scalar() {
+  local file="${1:?missing file}"
+  local section="${2:?missing section}"
+  local key="${3:?missing key}"
+  local value="${4:?missing value}"
+  local tmp_file
+  tmp_file="$(mktemp)"
+
+  awk -v section="${section}" -v key="${key}" -v value="${value}" '
+    function print_key() {
+      print "  " key ": " value
+    }
+
+    BEGIN {
+      section_seen = 0
+      in_section = 0
+      key_seen = 0
+    }
+
+    {
+      line = $0
+
+      if (line ~ ("^" section ":[[:space:]]*$")) {
+        if (in_section && !key_seen) {
+          print_key()
+          key_seen = 1
+        }
+        section_seen = 1
+        in_section = 1
+        key_seen = 0
+        print line
+        next
+      }
+
+      if (in_section && line ~ /^[^[:space:]#][^:]*:[[:space:]]*$/) {
+        if (!key_seen) {
+          print_key()
+          key_seen = 1
+        }
+        in_section = 0
+      }
+
+      if (in_section && line ~ ("^  " key ":[[:space:]]*")) {
+        print_key()
+        key_seen = 1
+        next
+      }
+
+      print line
+    }
+
+    END {
+      if (in_section && !key_seen) {
+        print_key()
+      } else if (!section_seen) {
+        print section ":"
+        print_key()
+      }
+    }
+  ' "${file}" >"${tmp_file}"
+
+  mv "${tmp_file}" "${file}"
+}
+
 yaml_mihomo_ensure_dns_fake_ip_filter_item() {
   local file="${1:?missing file}"
   local item="${2:?missing item}"
@@ -147,6 +211,18 @@ EOF
   yaml_set_scalar_if_missing "${rendered_file}" "external-controller" "\"127.0.0.1:9090\""
   yaml_set_scalar_if_missing "${rendered_file}" "external-ui" "\"./dashboard\""
   yaml_set_scalar_if_missing "${rendered_file}" "external-ui-url" "\"https://github.com/Zephyruso/zashboard/releases/latest/download/dist.zip\""
+
+  if [[ "${BOX_NETWORK_MODE}" == "tun" ]]; then
+    yaml_set_section_scalar "${rendered_file}" "tun" "enable" "true"
+    yaml_set_section_scalar "${rendered_file}" "tun" "auto-route" "true"
+    yaml_set_section_scalar "${rendered_file}" "tun" "auto-redirect" "true"
+    yaml_set_section_scalar "${rendered_file}" "tun" "strict-route" "true"
+  else
+    yaml_set_section_scalar "${rendered_file}" "tun" "enable" "false"
+    yaml_set_section_scalar "${rendered_file}" "tun" "auto-route" "false"
+    yaml_set_section_scalar "${rendered_file}" "tun" "auto-redirect" "false"
+    yaml_set_section_scalar "${rendered_file}" "tun" "strict-route" "false"
+  fi
 
   if [[ "${BOX_DNS_COEXIST_MODE}" == "preserve_tailnet" ]]; then
     yaml_mihomo_ensure_dns_fake_ip_filter_item "${rendered_file}" "+.tailscale.com"
