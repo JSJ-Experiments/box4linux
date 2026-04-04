@@ -282,7 +282,7 @@ updater_find_archive_member() {
   local candidate relative_path
 
   while IFS= read -r candidate; do
-    relative_path="${candidate#${unpack_dir}/}"
+    relative_path="${candidate#"${unpack_dir}"/}"
     if [[ -z "${member_regex}" || "${relative_path}" =~ ${member_regex} ]]; then
       printf '%s\n' "${candidate}"
       return 0
