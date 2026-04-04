@@ -2,14 +2,14 @@
 selected = "mihomo"
 bin_dir = "/usr/local/bin"
 workdir = "/var/lib/box"
-config_source = "/etc/box/profiles/config.yaml"
+config_source = "/etc/box/profiles/phone-mihomo-config.yml"
 
 [network]
-mode = "tun"
+mode = "mixed"
 tproxy_port = 9898
 redir_port = 9797
 dns_port = 1053
-dns_hijack_mode = "tproxy"
+dns_hijack_mode = "redirect"
 dns_coexist_mode = "preserve_tailnet"
 tailscale_iface = "tailscale0"
 tailnet_ipv4_cidr = "100.64.0.0/10"
@@ -19,7 +19,7 @@ tailscale_fwmark = "0x80000/0xff0000"
 tailscale_route_table = 52
 
 [firewall]
-backend = "iptables"
+backend = "nftables"
 route_table = 2024
 route_pref = 100
 fwmark = "16777216/16777216"
@@ -74,13 +74,20 @@ url = ""
 file = ""
 checksum = ""
 checksum_file = ""
-target = ""
+target = "/etc/box/profiles/phone-mihomo-config.yml"
 provider_names = []
 provider_urls = []
+# First-run options:
+# 1. Edit /etc/box/profiles/phone-mihomo-config.yml directly and replace
+#    <SUBSCRIPTION_URL_...> placeholders with your own provider URLs.
+# 2. Or enable updater-driven rendering with:
+#    preset = "mihomo_phone"
+#    provider_names = ["proxy1"]
+#    provider_urls = ["https://example.invalid/subscription"]
 
 [updater.geo]
 source = "auto"
-preset = ""
+preset = "auto"
 release_api_url = ""
 release_repo = ""
 release_channel = "stable"
@@ -101,4 +108,4 @@ url = ""
 file = ""
 checksum = ""
 checksum_file = ""
-target = ""
+target = "/var/lib/box/dashboard"

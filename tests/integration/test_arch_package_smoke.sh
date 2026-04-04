@@ -74,6 +74,17 @@ assert_file "${TMP_ROOT}/usr/lib/systemd/system/box-policy.service"
 assert_file "${TMP_ROOT}/usr/lib/systemd/system/box-update-all.service"
 assert_file "${TMP_ROOT}/usr/lib/systemd/system/box-update-all.timer"
 
+if ! grep -Fq 'config_source = "/etc/box/profiles/phone-mihomo-config.yml"' "${TMP_ROOT}/etc/box/box.toml"; then
+  printf 'packaged default config_source did not point at shipped Mihomo profile\n' >&2
+  cat "${TMP_ROOT}/etc/box/box.toml" >&2
+  exit 1
+fi
+if ! grep -Fq 'preset = "auto"' "${TMP_ROOT}/etc/box/box.toml"; then
+  printf 'packaged default geo preset was not auto\n' >&2
+  cat "${TMP_ROOT}/etc/box/box.toml" >&2
+  exit 1
+fi
+
 cat >"${CONFIG_PATH}" <<EOF_CFG
 [core]
 selected = "mihomo"

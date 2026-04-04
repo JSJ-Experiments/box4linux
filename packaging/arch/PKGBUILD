@@ -16,7 +16,7 @@ optdepends=(
   'networkmanager: nmcli integration for policy watcher SSID/BSSID detection'
   'systemd: unit lifecycle management'
 )
-backup=('etc/box/box.toml')
+backup=('etc/box/box.toml' 'etc/box/profiles/phone-mihomo-config.yml')
 install='box4linux.install'
 source=()
 sha256sums=()
