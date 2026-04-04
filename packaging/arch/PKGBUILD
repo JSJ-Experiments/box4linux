@@ -7,7 +7,7 @@ pkgdesc="Linux-native Box control plane"
 arch=('any')
 url="https://github.com/JSJ-Experiments/box4linux"
 license=('custom')
-depends=('bash' 'coreutils' 'iproute2' 'iptables' 'util-linux' 'gawk')
+depends=('bash' 'coreutils' 'curl' 'gawk' 'gzip' 'iproute2' 'iptables' 'jq' 'unzip' 'util-linux')
 optdepends=(
   'nftables: nftables backend support'
   'mihomo: mihomo core runtime'

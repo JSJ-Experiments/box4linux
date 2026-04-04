@@ -39,10 +39,23 @@ PROFILE_DIR="${TMP_DIR}/profiles"
 SOURCE_DIR="${TMP_DIR}/sources"
 ARTIFACT_DIR="${BOX_VAR_DIR}/artifacts"
 STAGING_DIR="${BOX_VAR_DIR}/staging"
+ACTIVE_MOCK_DIR="${TMP_DIR}/active-mockbin"
 
 export BOX_CONFIG_FILE="${CONFIG_FILE}"
-mkdir -p "${TMP_DIR}/mock" "${BOX_RUN_DIR}" "${BOX_VAR_DIR}" "${BOX_LOG_DIR}" "${INSTALLED_BIN_DIR}" "${PROFILE_DIR}" "${SOURCE_DIR}"
+mkdir -p "${TMP_DIR}/mock" "${BOX_RUN_DIR}" "${BOX_VAR_DIR}" "${BOX_LOG_DIR}" "${INSTALLED_BIN_DIR}" "${PROFILE_DIR}" "${SOURCE_DIR}" "${ACTIVE_MOCK_DIR}"
 touch "${MOCK_IPTABLES_STATE}" "${MOCK_IP_STATE}" "${MOCK_NFT_STATE}"
+
+for required_cmd in jq zip unzip gzip; do
+  if ! command -v "${required_cmd}" >/dev/null 2>&1; then
+    printf 'missing required test command: %s\n' "${required_cmd}" >&2
+    exit 1
+  fi
+done
+
+PATH_ORIG="${PATH}"
+for helper in curl ip iptables nft sing-box; do
+  ln -sf "${MOCK_DIR}/${helper}" "${ACTIVE_MOCK_DIR}/${helper}"
+done
 
 sha256_of() {
   sha256sum "$1" | awk '{print $1}'
@@ -197,6 +210,15 @@ rules:
   - MATCH,DIRECT
 EOF_MIHOMO_LIVE
 
+cat >"${PROFILE_DIR}/mihomo-dashboard.yaml" <<EOF_MIHOMO_DASH
+mode: rule
+mixed-port: 7890
+external-ui: ui/dashboard
+external-ui-download-url: file://${SOURCE_DIR}/dashboard-v1.zip
+rules:
+  - MATCH,DIRECT
+EOF_MIHOMO_DASH
+
 cat >"${SOURCE_DIR}/mihomo-updated.yaml" <<'EOF_MIHOMO_UPDATE'
 mode: rule
 mixed-port: 7891
@@ -212,6 +234,16 @@ cat >"${PROFILE_DIR}/sing-live.json" <<'EOF_SING_LIVE'
   ]
 }
 EOF_SING_LIVE
+
+cat >"${PROFILE_DIR}/sing-dashboard-generic.json" <<EOF_SING_DASH_GENERIC
+{
+  "log": { "level": "info" },
+  "custom": {
+    "external_ui": "ui/sing-dashboard",
+    "external_ui_download_url": "file://${SOURCE_DIR}/dashboard-v1.zip"
+  }
+}
+EOF_SING_DASH_GENERIC
 
 cat >"${SOURCE_DIR}/sing-updated.json" <<'EOF_SING_UPDATE'
 {
@@ -231,21 +263,132 @@ EOF_DASH
   tar -czf "${SOURCE_DIR}/dashboard-v1.tar.gz" .
 )
 
+mkdir -p "${SOURCE_DIR}/dashboard-zip/dist"
+cat >"${SOURCE_DIR}/dashboard-zip/dist/index.html" <<'EOF_DASH_ZIP'
+<!doctype html><title>dashboard-zip</title>
+EOF_DASH_ZIP
+(
+  cd "${SOURCE_DIR}/dashboard-zip"
+  zip -qr "${SOURCE_DIR}/dashboard-v1.zip" .
+)
+
+mkdir -p "${SOURCE_DIR}/sing-box-release"
+cat >"${SOURCE_DIR}/sing-box-release/sing-box" <<'EOF_SING_RELEASE'
+#!/usr/bin/env bash
+printf 'mock-release-sing-box\n'
+EOF_SING_RELEASE
+chmod +x "${SOURCE_DIR}/sing-box-release/sing-box"
+(
+  cd "${SOURCE_DIR}"
+  tar -czf "${SOURCE_DIR}/sing-box-1.0.0-linux-amd64.tar.gz" sing-box-release
+)
+
+cat >"${SOURCE_DIR}/mihomo-release-bin" <<'EOF_MIHOMO_RELEASE'
+#!/usr/bin/env bash
+printf 'mock-release-mihomo\n'
+EOF_MIHOMO_RELEASE
+chmod +x "${SOURCE_DIR}/mihomo-release-bin"
+gzip -c "${SOURCE_DIR}/mihomo-release-bin" >"${SOURCE_DIR}/mihomo-linux-amd64-v1.0.0.gz"
+
+cat >"${SOURCE_DIR}/geo-release-prerelease.dat" <<'EOF_GEO_RELEASE'
+geo-release-prerelease
+EOF_GEO_RELEASE
+
 KERNEL_V1_SHA="$(sha256_of "${SOURCE_DIR}/kernel-v1")"
 KERNEL_V2_SHA="$(sha256_of "${SOURCE_DIR}/kernel-v2")"
 GEO_V1_SHA="$(sha256_of "${SOURCE_DIR}/geo-v1.dat")"
-DASHBOARD_ARCHIVE_SHA="$(sha256_of "${SOURCE_DIR}/dashboard-v1.tar.gz")"
+DASHBOARD_ZIP_SHA="$(sha256_of "${SOURCE_DIR}/dashboard-v1.zip")"
 SUBS_MIHOMO_SHA="$(sha256_of "${SOURCE_DIR}/mihomo-updated.yaml")"
 SUBS_SING_SHA="$(sha256_of "${SOURCE_DIR}/sing-updated.json")"
+RELEASE_KERNEL_SHA="$(sha256_of "${SOURCE_DIR}/sing-box-1.0.0-linux-amd64.tar.gz")"
+RELEASE_KERNEL_BIN_SHA="$(sha256_of "${SOURCE_DIR}/sing-box-release/sing-box")"
+MIHOMO_RELEASE_SHA="$(sha256_of "${SOURCE_DIR}/mihomo-linux-amd64-v1.0.0.gz")"
+MIHOMO_RELEASE_BIN_SHA="$(sha256_of "${SOURCE_DIR}/mihomo-release-bin")"
+RELEASE_GEO_SHA="$(sha256_of "${SOURCE_DIR}/geo-release-prerelease.dat")"
 
-printf '[1/7] updater status with no configured sources\n'
+cat >"${SOURCE_DIR}/sing-box-1.0.0-linux-amd64.sha256" <<EOF_RELEASE_KERNEL_SHA
+${RELEASE_KERNEL_SHA}  sing-box-1.0.0-linux-amd64.tar.gz
+EOF_RELEASE_KERNEL_SHA
+
+cat >"${SOURCE_DIR}/geo-release-prerelease.sha256" <<EOF_RELEASE_GEO_SHA
+${RELEASE_GEO_SHA}  geo-release-prerelease.dat
+EOF_RELEASE_GEO_SHA
+
+cat >"${SOURCE_DIR}/mihomo-linux-amd64-v1.0.0.sha256" <<EOF_RELEASE_MIHOMO_SHA
+${MIHOMO_RELEASE_SHA}  mihomo-linux-amd64-v1.0.0.gz
+EOF_RELEASE_MIHOMO_SHA
+
+cat >"${SOURCE_DIR}/kernel-release-stable.json" <<EOF_KERNEL_RELEASE_JSON
+{
+  "tag_name": "v1.0.0",
+  "prerelease": false,
+  "assets": [
+    {
+      "name": "sing-box-1.0.0-linux-amd64.tar.gz",
+      "browser_download_url": "file://${SOURCE_DIR}/sing-box-1.0.0-linux-amd64.tar.gz"
+    },
+    {
+      "name": "sing-box-1.0.0-linux-amd64.sha256",
+      "browser_download_url": "file://${SOURCE_DIR}/sing-box-1.0.0-linux-amd64.sha256"
+    }
+  ]
+}
+EOF_KERNEL_RELEASE_JSON
+
+cat >"${SOURCE_DIR}/mihomo-release-stable.json" <<EOF_MIHOMO_RELEASE_JSON
+{
+  "tag_name": "v1.0.0",
+  "prerelease": false,
+  "assets": [
+    {
+      "name": "mihomo-linux-amd64-v1.0.0.gz",
+      "browser_download_url": "file://${SOURCE_DIR}/mihomo-linux-amd64-v1.0.0.gz"
+    },
+    {
+      "name": "mihomo-linux-amd64-v1.0.0.sha256",
+      "browser_download_url": "file://${SOURCE_DIR}/mihomo-linux-amd64-v1.0.0.sha256"
+    }
+  ]
+}
+EOF_MIHOMO_RELEASE_JSON
+
+cat >"${SOURCE_DIR}/geo-release-list.json" <<EOF_GEO_RELEASE_JSON
+[
+  {
+    "tag_name": "v1.0.0",
+    "prerelease": false,
+    "assets": [
+      {
+        "name": "geo-release-stable.dat",
+        "browser_download_url": "file://${SOURCE_DIR}/geo-v1.dat"
+      }
+    ]
+  },
+  {
+    "tag_name": "v1.1.0-rc1",
+    "prerelease": true,
+    "assets": [
+      {
+        "name": "geo-release-prerelease.dat",
+        "browser_download_url": "file://${SOURCE_DIR}/geo-release-prerelease.dat"
+      },
+      {
+        "name": "geo-release-prerelease.sha256",
+        "browser_download_url": "file://${SOURCE_DIR}/geo-release-prerelease.sha256"
+      }
+    ]
+  }
+]
+EOF_GEO_RELEASE_JSON
+
+printf '[1/16] updater status with no configured sources\n'
 write_common_config "mihomo" "${PROFILE_DIR}/mihomo-live.yaml" ""
 status_json="$(must_run update status --json)"
 assert_contains "${status_json}" '"artifact_dir":"'
 assert_contains "${status_json}" '"kernel":{"configured":false'
 assert_contains "${status_json}" '"subs":{"configured":false'
 
-printf '[2/7] kernel update idempotent rerun\n'
+printf '[2/16] kernel update idempotent rerun\n'
 write_common_config "mihomo" "${PROFILE_DIR}/mihomo-live.yaml" "[updater.kernel]
 file = \"${SOURCE_DIR}/kernel-v1\"
 checksum = \"${KERNEL_V1_SHA}\"
@@ -260,7 +403,7 @@ status_json="$(must_run update status --json)"
 assert_contains "${status_json}" '"kernel":{"configured":true,"status":"unchanged"'
 assert_contains "${status_json}" '"installed_sha256":"'"${KERNEL_V1_SHA}"'"'
 
-printf '[3/7] checksum mismatch fails safely\n'
+printf '[3/16] checksum mismatch fails safely\n'
 write_common_config "mihomo" "${PROFILE_DIR}/mihomo-live.yaml" "[updater.kernel]
 file = \"${SOURCE_DIR}/kernel-v2\"
 checksum = \"0000000000000000000000000000000000000000000000000000000000000000\"
@@ -271,7 +414,7 @@ assert_contains "${status_json}" '"kernel":{"configured":true,"status":"error"'
 assert_contains "${status_json}" '"last_error":"checksum verification failed"'
 assert_file_contains "${INSTALLED_BIN_DIR}/mihomo" 'mock-kernel-v1'
 
-printf '[4/7] download failure is reported\n'
+printf '[4/16] download failure is reported\n'
 export MOCK_CURL_FAIL_URL='https://updates.invalid/geo.dat'
 write_common_config "mihomo" "${PROFILE_DIR}/mihomo-live.yaml" "[updater.geo]
 url = \"https://updates.invalid/geo.dat\"
@@ -282,7 +425,7 @@ assert_contains "${status_json}" '"geo":{"configured":true,"status":"error"'
 assert_contains "${status_json}" '"last_error":"download failed"'
 unset MOCK_CURL_FAIL_URL
 
-printf '[5/7] update all installs geo and dashboard payloads\n'
+printf '[5/16] update all installs geo and dashboard payloads\n'
 write_common_config "mihomo" "${PROFILE_DIR}/mihomo-live.yaml" "[updater.kernel]
 file = \"${SOURCE_DIR}/kernel-v1\"
 checksum = \"${KERNEL_V1_SHA}\"
@@ -294,19 +437,150 @@ checksum = \"${GEO_V1_SHA}\"
 target = \"${ARTIFACT_DIR}/geo/geo.dat\"
 
 [updater.dashboard]
-file = \"${SOURCE_DIR}/dashboard-v1.tar.gz\"
-checksum = \"${DASHBOARD_ARCHIVE_SHA}\"
+file = \"${SOURCE_DIR}/dashboard-v1.zip\"
+checksum = \"${DASHBOARD_ZIP_SHA}\"
 target = \"${ARTIFACT_DIR}/dashboard/current\""
 must_run update all >/dev/null
 assert_file_contains "${ARTIFACT_DIR}/geo/geo.dat" 'geo-version-1'
 assert_dir_exists "${ARTIFACT_DIR}/dashboard/current"
-assert_file_contains "${ARTIFACT_DIR}/dashboard/current/index.html" 'dashboard-v1'
+assert_file_contains "${ARTIFACT_DIR}/dashboard/current/index.html" 'dashboard-zip'
 status_json="$(must_run update status --json)"
 assert_contains "${status_json}" '"geo":{"configured":true,"status":"success"'
 assert_contains "${status_json}" '"dashboard":{"configured":true,"status":"success"'
 assert_contains "${status_json}" '"subs":{"configured":false,"status":"skipped"'
 
-printf '[6/7] mihomo subscription update restarts running service\n'
+printf '[6/16] dashboard updater can derive target and url from core config\n'
+write_common_config "mihomo" "${PROFILE_DIR}/mihomo-dashboard.yaml" ""
+status_json="$(must_run update status --json)"
+assert_contains "${status_json}" '"dashboard":{"configured":true'
+must_run update dashboard >/dev/null
+assert_file_contains "${PROFILE_DIR}/ui/dashboard/index.html" 'dashboard-zip'
+status_json="$(must_run update status --json)"
+assert_contains "${status_json}" "\"target_path\":\"${PROFILE_DIR}/ui/dashboard\""
+rm -rf "${PROFILE_DIR}/ui/dashboard"
+must_run update all >/dev/null
+assert_file_contains "${PROFILE_DIR}/ui/dashboard/index.html" 'dashboard-zip'
+
+printf '[7/16] dashboard updater falls back to ./dashboard relative to core config\n'
+export MOCK_CURL_RESPONSE_FILE="${SOURCE_DIR}/dashboard-v1.zip"
+rm -rf "${PROFILE_DIR}/dashboard"
+write_common_config "mihomo" "${PROFILE_DIR}/mihomo-live.yaml" ""
+status_json="$(must_run update status --json)"
+assert_contains "${status_json}" '"dashboard":{"configured":true'
+must_run update all >/dev/null
+assert_file_contains "${PROFILE_DIR}/dashboard/index.html" 'dashboard-zip'
+unset MOCK_CURL_RESPONSE_FILE
+
+printf '[8/16] sing-box dashboard discovery accepts generic external_ui keys\n'
+write_common_config "sing-box" "${PROFILE_DIR}/sing-dashboard-generic.json" ""
+status_json="$(must_run update status --json)"
+assert_contains "${status_json}" '"dashboard":{"configured":true'
+must_run update dashboard >/dev/null
+assert_file_contains "${PROFILE_DIR}/ui/sing-dashboard/index.html" 'dashboard-zip'
+
+printf '[9/16] kernel release resolver selects stable archive asset\n'
+write_common_config "sing-box" "${PROFILE_DIR}/sing-live.json" "[updater.kernel]
+source = \"release\"
+release_api_url = \"file://${SOURCE_DIR}/kernel-release-stable.json\"
+release_channel = \"stable\"
+asset_regex = \"sing-box-.*linux.*(amd64|x86_64).*tar.gz$\"
+checksum_asset_regex = \"sha256$\"
+target = \"${INSTALLED_BIN_DIR}/sing-box\""
+must_run update kernel >/dev/null
+assert_file_contains "${INSTALLED_BIN_DIR}/sing-box" 'mock-release-sing-box'
+status_json="$(must_run update status --json)"
+assert_contains "${status_json}" "\"source_ref\":\"file://${SOURCE_DIR}/sing-box-1.0.0-linux-amd64.tar.gz\""
+assert_contains "${status_json}" "\"installed_sha256\":\"${RELEASE_KERNEL_BIN_SHA}\""
+
+printf '[10/16] mihomo kernel release resolver installs gzip asset\n'
+write_common_config "mihomo" "${PROFILE_DIR}/mihomo-live.yaml" "[updater.kernel]
+source = \"release\"
+release_api_url = \"file://${SOURCE_DIR}/mihomo-release-stable.json\"
+release_channel = \"stable\"
+asset_regex = \"mihomo-.*linux.*(amd64|x86_64).*gz$\"
+checksum_asset_regex = \"sha256$\"
+target = \"${INSTALLED_BIN_DIR}/mihomo-release\""
+must_run update kernel >/dev/null
+assert_file_contains "${INSTALLED_BIN_DIR}/mihomo-release" 'mock-release-mihomo'
+status_json="$(must_run update status --json)"
+assert_contains "${status_json}" "\"source_ref\":\"file://${SOURCE_DIR}/mihomo-linux-amd64-v1.0.0.gz\""
+assert_contains "${status_json}" "\"installed_sha256\":\"${MIHOMO_RELEASE_BIN_SHA}\""
+
+printf '[11/16] geo release resolver selects prerelease asset\n'
+write_common_config "mihomo" "${PROFILE_DIR}/mihomo-live.yaml" "[updater.geo]
+source = \"release\"
+release_api_url = \"file://${SOURCE_DIR}/geo-release-list.json\"
+release_channel = \"prerelease\"
+asset_regex = \"geo-release-prerelease.dat$\"
+checksum_asset_regex = \"geo-release-prerelease.sha256$\"
+target = \"${ARTIFACT_DIR}/geo/geo-release.dat\""
+must_run update geo >/dev/null
+assert_file_contains "${ARTIFACT_DIR}/geo/geo-release.dat" 'geo-release-prerelease'
+status_json="$(must_run update status --json)"
+assert_contains "${status_json}" "\"source_ref\":\"file://${SOURCE_DIR}/geo-release-prerelease.dat\""
+
+printf '[12/16] geo update does not restart running service\n'
+write_common_config "mihomo" "${PROFILE_DIR}/mihomo-live.yaml" "[updater.geo]
+file = \"${SOURCE_DIR}/geo-v2.dat\"
+checksum = \"$(sha256_of "${SOURCE_DIR}/geo-v2.dat")\"
+target = \"${ARTIFACT_DIR}/geo/geo.dat\""
+must_run service start >/dev/null
+geo_pid_before="$(service_pid)"
+must_run update geo >/dev/null
+geo_pid_after="$(service_pid)"
+assert_pid_same "${geo_pid_before}" "${geo_pid_after}"
+status_json="$(must_run update status --json)"
+assert_contains "${status_json}" '"geo":{"configured":true,"status":"success"'
+assert_contains "${status_json}" '"last_handoff":"none"'
+must_run service stop >/dev/null
+
+printf '[13/16] inactive kernel target does not restart running service\n'
+write_common_config "mihomo" "${PROFILE_DIR}/mihomo-live.yaml" "[updater.kernel]
+file = \"${SOURCE_DIR}/kernel-v2\"
+checksum = \"${KERNEL_V2_SHA}\"
+target = \"${INSTALLED_BIN_DIR}/mihomo\""
+must_run service start >/dev/null
+kernel_pid_before="$(service_pid)"
+must_run update kernel >/dev/null
+kernel_pid_after="$(service_pid)"
+assert_pid_same "${kernel_pid_before}" "${kernel_pid_after}"
+status_json="$(must_run update status --json)"
+assert_contains "${status_json}" '"kernel":{"configured":true,"status":"success"'
+assert_contains "${status_json}" '"last_handoff":"none"'
+must_run service stop >/dev/null
+
+printf '[14/16] failed kernel handoff restores old binary and service\n'
+cat >"${INSTALLED_BIN_DIR}/mihomo" <<'EOF_ACTIVE_GOOD'
+#!/usr/bin/env bash
+if [[ "${1:-}" == "-t" ]]; then
+  exit 0
+fi
+trap 'exit 0' TERM INT
+while true; do
+  sleep 1
+done
+EOF_ACTIVE_GOOD
+chmod +x "${INSTALLED_BIN_DIR}/mihomo"
+cat >"${SOURCE_DIR}/kernel-bad" <<'EOF_BAD_KERNEL'
+#!/usr/bin/env bash
+exit 1
+EOF_BAD_KERNEL
+chmod +x "${SOURCE_DIR}/kernel-bad"
+PATH="${ACTIVE_MOCK_DIR}:/usr/bin:/bin"
+write_common_config "mihomo" "${PROFILE_DIR}/mihomo-live.yaml" "[updater.kernel]
+file = \"${SOURCE_DIR}/kernel-bad\"
+checksum = \"$(sha256_of "${SOURCE_DIR}/kernel-bad")\"
+target = \"${INSTALLED_BIN_DIR}/mihomo\""
+must_run service start >/dev/null
+recovery_pid_before="$(service_pid)"
+must_fail update kernel >/dev/null
+recovery_pid_after="$(service_pid)"
+assert_pid_changed "${recovery_pid_before}" "${recovery_pid_after}"
+assert_file_contains "${INSTALLED_BIN_DIR}/mihomo" 'while true; do'
+must_run service stop >/dev/null
+PATH="${PATH_ORIG}"
+
+printf '[15/16] mihomo subscription update restarts running service\n'
 write_common_config "mihomo" "${PROFILE_DIR}/mihomo-live.yaml" "[updater.subs]
 file = \"${SOURCE_DIR}/mihomo-updated.yaml\"
 checksum = \"${SUBS_MIHOMO_SHA}\"
@@ -322,7 +596,7 @@ assert_contains "${status_json}" '"subs":{"configured":true,"status":"success"'
 assert_contains "${status_json}" '"last_handoff":"restart"'
 must_run service stop >/dev/null
 
-printf '[7/7] sing-box subscription update falls back to restart\n'
+printf '[16/16] sing-box subscription update falls back to restart\n'
 write_common_config "sing-box" "${PROFILE_DIR}/sing-live.json" "[updater.subs]
 file = \"${SOURCE_DIR}/sing-updated.json\"
 checksum = \"${SUBS_SING_SHA}\"

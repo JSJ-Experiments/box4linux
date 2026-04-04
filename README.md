@@ -55,17 +55,38 @@ Update sources are configured in `/etc/box/box.toml` under:
 Supported inputs:
 - `url`
 - `file`
+- `source = "release"` for `kernel` and `geo`
 - `checksum`
 - `checksum_file`
 - `target`
+
+Release resolver fields for `kernel` and `geo`:
+- `source = "release"`
+- `release_api_url` or `release_repo`
+- `release_channel = stable|prerelease|any`
+- `release_tag`
+- `asset_regex`
+- `checksum_asset_regex`
+- `release_os`
+- `release_arch`
+- `archive_member_regex`
 
 Failure semantics:
 - downloads go to staging first
 - checksum verification follows `checksum_policy = off|optional|required`
 - staged payload is validated before install
-- install writes target atomically with backup/restore on handoff failure
+- install stages beside the target and renames into place with backup/restore on failure
 - runtime handoff prefers reload when supported, otherwise controlled restart
 - current `mihomo` and `sing-box` updater handoff uses controlled restart; API reload hooks remain TODO
+- release resolution requires `jq`
+- `source = "auto"` does not implicitly enable release downloads; set `source = "release"` explicitly
+- kernel release assets support raw binaries, `.gz`, `.tar`, `.tar.gz`, `.tgz`, and `.tar.xz`
+- dashboard archives support `.zip`, `.tar.gz`, `.tgz`, `.tar`, `.tar.xz`
+- nested dashboard archive roots are flattened automatically when a single top-level directory is present
+- dashboard target and download URL can be derived from core config (`external-ui` / `external_ui`, `external-ui-download-url` / `external_ui_download_url`)
+- if the core config omits a dashboard target, updater falls back to `./dashboard` relative to the core config path
+- `geo` updates do not restart the running core
+- `kernel` updates restart only when the updated target matches the active core binary
 
 Timer units shipped in `systemd/`:
 - `box-update-kernel.service` + `.timer`
@@ -159,6 +180,7 @@ On tags (`v*`):
 - Supported cores: `mihomo`, `sing-box`
 - Runtime overlays rendered under `/run/box/rendered` (or dev fallback)
 - Updater components: `kernel`, `subs`, `geo`, `dashboard`
+- `kernel` and `geo` can resolve release assets by channel/tag/arch when explicitly configured with `source = "release"`
 - Firewall backends:
   - `iptables` (mature path)
   - `nftables` (MVP parity)
