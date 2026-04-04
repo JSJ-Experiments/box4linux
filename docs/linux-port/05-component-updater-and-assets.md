@@ -56,6 +56,8 @@ Current Linux-native behavior:
 - file, archive, and directory payloads are staged before install
 - runtime handoff happens only after validation + install succeed
 - failed handoff restores the pre-update target from backup
+- `kernel` and `geo` support explicit release-resolution mode via GitHub release metadata
+- final install is staged in the target directory before the last rename
 
 ## Subscription Pipeline
 For mihomo:
@@ -81,7 +83,7 @@ Current Linux-native install kinds:
 - `kernel`: file -> executable target
 - `subs`: file -> config source target
 - `geo`: file -> data target
-- `dashboard`: archive or directory -> target directory
+- `dashboard`: zip/tar archive or directory -> target directory
 
 ## Config Model
 
@@ -109,6 +111,23 @@ Accepted source fields per component:
 - `url` or `file`
 - optional `checksum` or `checksum_file`
 - optional `target`
+
+Release-resolution fields for `kernel` and `geo`:
+- `source = "release"`
+- `release_api_url` or `release_repo`
+- `release_channel = stable|prerelease|any`
+- `release_tag`
+- `asset_regex`
+- `checksum_asset_regex`
+- `release_os`
+- `release_arch`
+- `archive_member_regex`
+
+Resolver notes:
+- `source = "auto"` does not implicitly enable release downloads
+- `kernel` release mode falls back to built-in default repos for the supported cores
+- `geo` release mode requires an explicit `release_repo` or `release_api_url`
+- `jq` is required when resolving release metadata
 
 Failure rules:
 - no configured source => component update fails safely
@@ -140,6 +159,23 @@ Timer notes:
 3. Select asset by `{os, arch, libc}`.
 4. Fetch artifact + optional checksum.
 5. Validate and install atomically.
+
+Current resolver contract:
+- `kernel`
+  - supports raw binaries, release-selected `.gz` payloads, and release-selected archives
+  - archive payloads extract the member matching `archive_member_regex`
+  - default repos:
+    - `mihomo` -> `MetaCubeX/mihomo`
+    - `sing-box` -> `SagerNet/sing-box`
+- `geo`
+  - supports raw files and release-selected assets
+  - archive payloads extract the member matching `archive_member_regex`
+  - asset naming is intentionally config-driven via `asset_regex`
+- `dashboard`
+  - supports `.zip`, `.tar`, `.tar.gz`, `.tgz`, `.tar.xz`, and pre-unpacked directories
+  - if an archive expands into a single top-level directory, that directory becomes the installed UI root
+  - if updater target/url are unset, the resolver can derive them from the current core config
+  - if the core config does not define a dashboard path, the install target falls back to `./dashboard` relative to that config file
 
 ## Atomic Install Procedure
 ```bash
@@ -182,8 +218,10 @@ Before activation:
 Current handoff behavior:
 - `sing-box` subscriptions: controlled restart
 - `mihomo` subscriptions: controlled restart
-- `kernel` and `geo`: controlled restart when service is running
+- `kernel`: controlled restart only when the updated target is the active running core binary
+- `geo`: no forced restart
 - `dashboard`: no runtime handoff
 
 TODO:
 - replace restart fallback with real API-driven reloads once core-specific reload endpoints are implemented
+- add richer release asset heuristics for common geo providers so fewer installs need explicit regex overrides

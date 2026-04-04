@@ -124,8 +124,9 @@ updater_service_running() {
 
 updater_handoff_runtime() {
   local component="${1:?missing component}"
+  local active_bin
 
-  if [[ "${component}" == "dashboard" ]]; then
+  if [[ "${component}" == "dashboard" || "${component}" == "geo" ]]; then
     printf '%s\n' "none"
     return 0
   fi
@@ -136,6 +137,13 @@ updater_handoff_runtime() {
   fi
 
   case "${component}" in
+    kernel)
+      active_bin="$(resolve_core_bin || true)"
+      if [[ -z "${active_bin}" || "${active_bin}" != "${UP_TARGET_PATH}" ]]; then
+        printf '%s\n' "none"
+        return 0
+      fi
+      ;;
     subs)
       case "${BOX_CORE}" in
         sing-box)
@@ -158,6 +166,32 @@ updater_handoff_runtime() {
 
   log "ERROR" "updater" "E_UPDATE_HANDOFF" "runtime handoff failed for component=${component}"
   return "${E_UPDATE}"
+}
+
+updater_recover_runtime_after_restore() {
+  local component="${1:?missing component}"
+
+  case "${component}" in
+    dashboard|geo)
+      return 0
+      ;;
+    kernel)
+      if ! updater_service_running; then
+        if ! service_restart; then
+          return "${E_UPDATE}"
+        fi
+      else
+        if ! service_restart; then
+          return "${E_UPDATE}"
+        fi
+      fi
+      ;;
+    subs)
+      if ! service_restart; then
+        return "${E_UPDATE}"
+      fi
+      ;;
+  esac
 }
 
 updater_validate_staged_component() {
@@ -205,6 +239,14 @@ updater_validate_staged_component() {
         log "ERROR" "updater" "E_UPDATE_VALIDATE" "dashboard payload is not a directory: ${staged_path}"
         return "${E_UPDATE}"
       fi
+      if ! find "${staged_path}" -mindepth 1 -print -quit | grep -q .; then
+        log "ERROR" "updater" "E_UPDATE_VALIDATE" "dashboard payload is empty: ${staged_path}"
+        return "${E_UPDATE}"
+      fi
+      if [[ ! -f "${staged_path}/index.html" ]]; then
+        log "ERROR" "updater" "E_UPDATE_VALIDATE" "dashboard payload missing index.html: ${staged_path}"
+        return "${E_UPDATE}"
+      fi
       ;;
   esac
 }
@@ -227,16 +269,61 @@ updater_component_checksum() {
   local install_kind="${1:?missing install kind}"
   local path="${2:?missing path}"
   case "${install_kind}" in
-    file|archive) updater_compute_sha256 "${path}" ;;
-    directory) updater_compute_tree_sha256 "${path}" ;;
+    file|archive-file|gzip-file) updater_compute_sha256 "${path}" ;;
+    directory|archive-dir) updater_compute_tree_sha256 "${path}" ;;
     *) return 1 ;;
   esac
 }
 
+updater_find_archive_member() {
+  local component="${1:?missing component}"
+  local unpack_dir="${2:?missing unpack dir}"
+  local member_regex="${3:-}"
+  local candidate relative_path
+
+  while IFS= read -r candidate; do
+    relative_path="${candidate#${unpack_dir}/}"
+    if [[ -z "${member_regex}" || "${relative_path}" =~ ${member_regex} ]]; then
+      printf '%s\n' "${candidate}"
+      return 0
+    fi
+  done < <(find "${unpack_dir}" -type f | LC_ALL=C sort)
+
+  log "ERROR" "updater" "E_UPDATE_ARCHIVE_MEMBER" \
+    "no archive member matched for component=${component} regex=${member_regex:-<any>}"
+  return "${E_UPDATE}"
+}
+
+updater_dashboard_payload_root() {
+  local unpack_dir="${1:?missing unpack dir}"
+  local index_file candidate best_dir=""
+  local top_entries=()
+
+  while IFS= read -r index_file; do
+    candidate="$(dirname "${index_file}")"
+    if [[ -z "${best_dir}" || "${#candidate}" -gt "${#best_dir}" ]]; then
+      best_dir="${candidate}"
+    fi
+  done < <(find "${unpack_dir}" -type f -name 'index.html' | LC_ALL=C sort)
+
+  if [[ -n "${best_dir}" ]]; then
+    printf '%s\n' "${best_dir}"
+    return 0
+  fi
+
+  mapfile -t top_entries < <(find "${unpack_dir}" -mindepth 1 -maxdepth 1 | LC_ALL=C sort)
+  if [[ "${#top_entries[@]}" == "1" && -d "${top_entries[0]}" ]]; then
+    printf '%s\n' "${top_entries[0]}"
+    return 0
+  fi
+
+  printf '%s\n' "${unpack_dir}"
+}
+
 updater_apply_component() {
   local component="${1:?missing component}"
-  local source_basename fetch_output dashboard_unpack_dir source_checksum previous_checksum target_checksum handoff result_status
-  local validate_path="" install_path=""
+  local source_basename fetch_output unpack_dir="" install_source="" source_checksum previous_checksum target_checksum handoff result_status
+  local validate_path="" install_path="" target_install_kind=""
 
   if ! updater_resolve_component "${component}"; then
     updater_write_state_component "${component}" "error" "component not configured" "" "" "" "none"
@@ -244,7 +331,7 @@ updater_apply_component() {
   fi
 
   updater_install_reset
-  source_basename="$(basename "${UP_SOURCE_REF}")"
+  source_basename="${UP_SOURCE_NAME:-$(basename "${UP_SOURCE_REF}")}"
   fetch_output="$(updater_stage_dir "${component}.${source_basename}.download")"
   rm -rf "${fetch_output}"
 
@@ -264,16 +351,38 @@ updater_apply_component() {
       validate_path="${fetch_output}"
       install_path="${fetch_output}"
       ;;
-    archive)
-      dashboard_unpack_dir="$(updater_stage_dir "${component}.unpack.$$")"
-      updater_cleanup_paths "${dashboard_unpack_dir}"
-      if ! updater_extract_archive "${fetch_output}" "${dashboard_unpack_dir}" "${UP_SOURCE_REF}"; then
-        updater_write_state_component "${component}" "error" "archive extraction failed" "${UP_SOURCE_REF}" "${UP_TARGET_PATH}" "" "none"
-        updater_cleanup_paths "${fetch_output}" "${dashboard_unpack_dir}"
+    gzip-file)
+      install_source="$(updater_stage_dir "${component}.extract.$$")"
+      updater_cleanup_paths "${install_source}"
+      if ! updater_extract_gzip "${fetch_output}" "${install_source}"; then
+        updater_write_state_component "${component}" "error" "gzip extraction failed" "${UP_SOURCE_REF}" "${UP_TARGET_PATH}" "" "none"
+        updater_cleanup_paths "${fetch_output}" "${install_source}"
         return "${E_UPDATE}"
       fi
-      validate_path="${dashboard_unpack_dir}"
-      install_path="${dashboard_unpack_dir}"
+      validate_path="${install_source}"
+      install_path="${install_source}"
+      ;;
+    archive-file|archive-dir)
+      unpack_dir="$(updater_stage_dir "${component}.unpack.$$")"
+      updater_cleanup_paths "${unpack_dir}"
+      if ! updater_extract_archive "${fetch_output}" "${unpack_dir}" "${UP_SOURCE_NAME:-${UP_SOURCE_REF}}"; then
+        updater_write_state_component "${component}" "error" "archive extraction failed" "${UP_SOURCE_REF}" "${UP_TARGET_PATH}" "" "none"
+        updater_cleanup_paths "${fetch_output}" "${unpack_dir}"
+        return "${E_UPDATE}"
+      fi
+      if [[ "${UP_INSTALL_KIND}" == "archive-file" ]]; then
+        install_source="$(updater_find_archive_member "${component}" "${unpack_dir}" "${UP_ARCHIVE_MEMBER_REGEX}")" || {
+          updater_write_state_component "${component}" "error" "archive member not found" "${UP_SOURCE_REF}" "${UP_TARGET_PATH}" "" "none"
+          updater_cleanup_paths "${fetch_output}" "${unpack_dir}"
+          return "${E_UPDATE}"
+        }
+        validate_path="${install_source}"
+        install_path="${install_source}"
+      else
+        install_source="$(updater_dashboard_payload_root "${unpack_dir}")"
+        validate_path="${install_source}"
+        install_path="${install_source}"
+      fi
       ;;
     directory)
       validate_path="${fetch_output}"
@@ -288,39 +397,44 @@ updater_apply_component() {
 
   if ! updater_validate_staged_component "${component}" "${validate_path}"; then
     updater_write_state_component "${component}" "error" "validation failed" "${UP_SOURCE_REF}" "${UP_TARGET_PATH}" "" "none"
-    updater_cleanup_paths "${fetch_output}" "${dashboard_unpack_dir}"
+    updater_cleanup_paths "${fetch_output}" "${unpack_dir}"
     return "${E_UPDATE}"
   fi
 
   source_checksum="$(updater_component_checksum "${UP_INSTALL_KIND}" "${install_path}" || true)"
   previous_checksum="$(updater_read_state_value "${component}" "installed_sha256" || true)"
   if [[ -n "${source_checksum}" && -n "${previous_checksum}" && "${source_checksum}" == "${previous_checksum}" ]]; then
-    target_checksum="$(updater_component_checksum "$([[ "${UP_INSTALL_KIND}" == "archive" || "${UP_INSTALL_KIND}" == "directory" ]] && printf 'directory' || printf 'file')" "${UP_TARGET_PATH}" || true)"
+    if [[ "${UP_INSTALL_KIND}" == "archive-dir" || "${UP_INSTALL_KIND}" == "directory" ]]; then
+      target_install_kind="directory"
+    else
+      target_install_kind="file"
+    fi
+    target_checksum="$(updater_component_checksum "${target_install_kind}" "${UP_TARGET_PATH}" || true)"
     if [[ -n "${target_checksum}" && "${target_checksum}" == "${source_checksum}" ]]; then
       updater_install_nochange "${source_checksum}"
     fi
   fi
 
   case "${UP_INSTALL_KIND}" in
-    file)
+    file|archive-file|gzip-file)
       if [[ "${UP_INSTALL_CHANGED}" != "false" || -z "${UP_INSTALL_CHECKSUM}" ]]; then
-        if ! updater_install_file "${component}" "${fetch_output}" "${UP_TARGET_PATH}" "$([[ "${component}" == "kernel" ]] && printf 'true' || printf 'false')"; then
+        if ! updater_install_file "${component}" "${install_path}" "${UP_TARGET_PATH}" "$([[ "${component}" == "kernel" ]] && printf 'true' || printf 'false')"; then
           updater_write_state_component "${component}" "error" "install failed" "${UP_SOURCE_REF}" "${UP_TARGET_PATH}" "" "none"
-          updater_cleanup_paths "${fetch_output}"
+          updater_cleanup_paths "${fetch_output}" "${unpack_dir}"
           return "${E_UPDATE}"
         fi
       fi
-      updater_cleanup_paths "${fetch_output}"
+      updater_cleanup_paths "${fetch_output}" "${unpack_dir}"
       ;;
-    archive)
+    archive-dir)
       if [[ "${UP_INSTALL_CHANGED}" != "false" || -z "${UP_INSTALL_CHECKSUM}" ]]; then
-        if ! updater_install_directory "${component}" "${dashboard_unpack_dir}" "${UP_TARGET_PATH}" "${source_checksum}" "${previous_checksum}"; then
+        if ! updater_install_directory "${component}" "${install_path}" "${UP_TARGET_PATH}" "${source_checksum}" "${previous_checksum}"; then
           updater_write_state_component "${component}" "error" "install failed" "${UP_SOURCE_REF}" "${UP_TARGET_PATH}" "" "none"
-          updater_cleanup_paths "${fetch_output}" "${dashboard_unpack_dir}"
+          updater_cleanup_paths "${fetch_output}" "${unpack_dir}"
           return "${E_UPDATE}"
         fi
       fi
-      updater_cleanup_paths "${fetch_output}" "${dashboard_unpack_dir}"
+      updater_cleanup_paths "${fetch_output}" "${unpack_dir}"
       ;;
     directory)
       if [[ "${UP_INSTALL_CHANGED}" != "false" || -z "${UP_INSTALL_CHECKSUM}" ]]; then
@@ -337,6 +451,7 @@ updater_apply_component() {
   if [[ "${UP_INSTALL_CHANGED}" == "true" && "${UP_REQUIRES_HANDOFF}" == "true" ]]; then
     if ! handoff="$(updater_handoff_runtime "${component}")"; then
       updater_restore_backup "${UP_TARGET_PATH}"
+      updater_recover_runtime_after_restore "${component}" || true
       updater_write_state_component "${component}" "error" "runtime handoff failed" "${UP_SOURCE_REF}" "${UP_TARGET_PATH}" "${UP_INSTALL_CHECKSUM}" "failed"
       return "${E_UPDATE}"
     fi
