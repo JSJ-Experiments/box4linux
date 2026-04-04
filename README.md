@@ -166,8 +166,17 @@ Installed layout:
 
 Config upgrade behavior:
 - Package marks `/etc/box/box.toml` as backup config.
+- Package also marks `/etc/box/profiles/phone-mihomo-config.yml` as backup config.
 - Local edits are preserved across upgrades.
 - New template versions land as `.pacnew` when needed.
+
+Packaged first-run defaults:
+- `/etc/box/box.toml` already points `config_source` at `/etc/box/profiles/phone-mihomo-config.yml`
+- default runtime mode is `mixed` with `dns_hijack_mode = "redirect"`
+- default firewall backend is `nftables`
+- `updater.geo.preset = "auto"` is enabled by default
+- `updater.subs.target` already points at the shipped Mihomo profile
+- you can either edit the shipped Mihomo profile directly or enable `updater.subs.preset = "mihomo_phone"` in `box.toml`
 
 ## Service Lifecycle (Packaged Install)
 
@@ -189,13 +198,19 @@ Manual equivalent:
 1. Verify command and units:
    - `boxctl service status --json`
    - `boxctl firewall status --json`
-2. Preview firewall operations:
+2. Edit the shipped Mihomo profile or updater source:
+   - replace `<SUBSCRIPTION_URL_...>` placeholders in `/etc/box/profiles/phone-mihomo-config.yml`
+   - or set `[updater.subs] preset = "mihomo_phone"` and fill `provider_names` / `provider_urls` in `/etc/box/box.toml`
+3. Preview firewall operations:
    - `boxctl firewall dry-run`
-3. Start runtime:
+4. Materialize optional managed assets:
+   - `sudo boxctl update geo`
+   - `sudo boxctl update dashboard`
+5. Start runtime:
    - `sudo systemctl start box.service`
-4. Renew firewall policy safely:
+6. Renew firewall policy safely:
    - `sudo systemctl reload box-firewall.service`
-5. Run or schedule updates:
+7. Run or schedule updates:
    - `sudo systemctl start box-update-all.service`
    - `sudo systemctl enable --now box-update-subs.timer`
 

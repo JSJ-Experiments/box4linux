@@ -62,6 +62,7 @@ Current Linux-native behavior:
 - final install is staged in the target directory before the last rename
 - `subs` supports a Linux-native preset renderer for the sanitized Mihomo phone profile
 - `geo` supports built-in MetaCubeX presets for mihomo, sing-box, and legacy dat consumers
+- packaged defaults already point `config_source` at the shipped Mihomo profile and set `updater.geo.preset = "auto"`
 
 ## Subscription Pipeline
 For mihomo:
@@ -130,6 +131,7 @@ Preset notes:
 - `mihomo_phone` renders `/etc/box/profiles/phone-mihomo-config.yml` into the subscription target and replaces placeholder provider URLs using `provider_names` and `provider_urls`
 - if `provider_names` is omitted, the default order is `proxy1 proxy3 proxy4 proxy5 proxy6`
 - `geo` presets emit fixed Linux-native MetaCubeX asset URLs without mutating source config in place
+- packaged installs can also skip updater-managed subscriptions and edit `/etc/box/profiles/phone-mihomo-config.yml` directly for first-run setup
 
 Release-resolution fields for `kernel` and `geo`:
 - `source = "release"`
