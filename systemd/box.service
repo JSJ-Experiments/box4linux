@@ -2,7 +2,6 @@
 Description=Box Linux Core Supervisor
 After=network-online.target
 Wants=network-online.target
-Wants=box-policy.service
 
 [Service]
 Type=forking
