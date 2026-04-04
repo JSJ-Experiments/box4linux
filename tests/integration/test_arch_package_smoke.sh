@@ -79,6 +79,11 @@ if ! grep -Fq 'config_source = "/etc/box/profiles/phone-mihomo-config.yml"' "${T
   cat "${TMP_ROOT}/etc/box/box.toml" >&2
   exit 1
 fi
+if ! grep -Fq 'bin_dir = "/usr/bin"' "${TMP_ROOT}/etc/box/box.toml"; then
+  printf 'packaged default bin_dir was not /usr/bin\n' >&2
+  cat "${TMP_ROOT}/etc/box/box.toml" >&2
+  exit 1
+fi
 if ! grep -Fq 'preset = "auto"' "${TMP_ROOT}/etc/box/box.toml"; then
   printf 'packaged default geo preset was not auto\n' >&2
   cat "${TMP_ROOT}/etc/box/box.toml" >&2

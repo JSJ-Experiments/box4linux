@@ -1,6 +1,6 @@
 [core]
 selected = "mihomo"
-bin_dir = "/usr/local/bin"
+bin_dir = "/usr/bin"
 workdir = "/var/lib/box"
 config_source = "/etc/box/profiles/phone-mihomo-config.yml"
 

@@ -16,6 +16,10 @@ BOX_DEV_ROOT="${BOX_REPO_ROOT}/.box-dev"
 BOX_DEV_VAR_DIR="${BOX_DEV_ROOT}/var"
 BOX_DEV_RUN_DIR="${BOX_DEV_ROOT}/run"
 BOX_DEV_LOG_DIR="${BOX_DEV_ROOT}/log"
+BOX_USER_STATE_ROOT="${XDG_RUNTIME_DIR:-${TMPDIR:-/tmp}}/box4linux-${UID}"
+BOX_USER_VAR_DIR="${BOX_USER_STATE_ROOT}/var"
+BOX_USER_RUN_DIR="${BOX_USER_STATE_ROOT}/run"
+BOX_USER_LOG_DIR="${BOX_USER_STATE_ROOT}/log"
 
 BOX_VAR_DIR="${BOX_VAR_DIR:-${BOX_VAR_DIR_DEFAULT}}"
 BOX_RUN_DIR="${BOX_RUN_DIR:-${BOX_RUN_DIR_DEFAULT}}"
@@ -49,9 +53,19 @@ resolve_runtime_path() {
 }
 
 init_runtime_paths() {
-  BOX_VAR_DIR="$(resolve_runtime_path "${BOX_VAR_DIR}" "${BOX_DEV_VAR_DIR}")"
-  BOX_RUN_DIR="$(resolve_runtime_path "${BOX_RUN_DIR}" "${BOX_DEV_RUN_DIR}")"
-  BOX_LOG_DIR="$(resolve_runtime_path "${BOX_LOG_DIR}" "${BOX_DEV_LOG_DIR}")"
+  local fallback_var="${BOX_DEV_VAR_DIR}"
+  local fallback_run="${BOX_DEV_RUN_DIR}"
+  local fallback_log="${BOX_DEV_LOG_DIR}"
+
+  if [[ "${BOX_LIB_DIR}" == /usr/lib/box4linux* || "${BOX_REPO_ROOT}" == /usr/lib/box4linux* ]]; then
+    fallback_var="${BOX_USER_VAR_DIR}"
+    fallback_run="${BOX_USER_RUN_DIR}"
+    fallback_log="${BOX_USER_LOG_DIR}"
+  fi
+
+  BOX_VAR_DIR="$(resolve_runtime_path "${BOX_VAR_DIR}" "${fallback_var}")"
+  BOX_RUN_DIR="$(resolve_runtime_path "${BOX_RUN_DIR}" "${fallback_run}")"
+  BOX_LOG_DIR="$(resolve_runtime_path "${BOX_LOG_DIR}" "${fallback_log}")"
   BOX_LOCK_DIR="${BOX_RUN_DIR}/locks"
   mkdir -p "${BOX_LOCK_DIR}" "${BOX_RUN_DIR}/state" 2>/dev/null || true
   export BOX_VAR_DIR BOX_RUN_DIR BOX_LOG_DIR BOX_LOCK_DIR

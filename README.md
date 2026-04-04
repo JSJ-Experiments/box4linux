@@ -172,6 +172,7 @@ Config upgrade behavior:
 
 Packaged first-run defaults:
 - `/etc/box/box.toml` already points `config_source` at `/etc/box/profiles/phone-mihomo-config.yml`
+- default `bin_dir` is `/usr/bin`
 - default runtime mode is `mixed` with `dns_hijack_mode = "redirect"`
 - default firewall backend is `nftables`
 - `updater.geo.preset = "auto"` is enabled by default
