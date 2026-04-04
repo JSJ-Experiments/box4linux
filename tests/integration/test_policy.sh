@@ -11,11 +11,15 @@ cleanup() {
   local pid
   if [[ -f "${BOX_RUN_DIR}/policy.pid" ]]; then
     pid="$(tr -d '[:space:]' <"${BOX_RUN_DIR}/policy.pid" || true)"
-    [[ -n "${pid:-}" ]] && kill -TERM "${pid}" >/dev/null 2>&1 || true
+    if [[ -n "${pid:-}" ]]; then
+      kill -TERM "${pid}" >/dev/null 2>&1 || true
+    fi
   fi
   if [[ -f "${BOX_RUN_DIR}/box.pid" ]]; then
     pid="$(tr -d '[:space:]' <"${BOX_RUN_DIR}/box.pid" || true)"
-    [[ -n "${pid:-}" ]] && kill -TERM "${pid}" >/dev/null 2>&1 || true
+    if [[ -n "${pid:-}" ]]; then
+      kill -TERM "${pid}" >/dev/null 2>&1 || true
+    fi
   fi
   rm -rf "${TMP_DIR}"
 }
@@ -93,11 +97,15 @@ force_reset_runtime() {
   local pid
   if [[ -f "${BOX_RUN_DIR}/policy.pid" ]]; then
     pid="$(tr -d '[:space:]' <"${BOX_RUN_DIR}/policy.pid" || true)"
-    [[ -n "${pid:-}" ]] && kill -TERM "${pid}" >/dev/null 2>&1 || true
+    if [[ -n "${pid:-}" ]]; then
+      kill -TERM "${pid}" >/dev/null 2>&1 || true
+    fi
   fi
   if [[ -f "${BOX_RUN_DIR}/box.pid" ]]; then
     pid="$(tr -d '[:space:]' <"${BOX_RUN_DIR}/box.pid" || true)"
-    [[ -n "${pid:-}" ]] && kill -TERM "${pid}" >/dev/null 2>&1 || true
+    if [[ -n "${pid:-}" ]]; then
+      kill -TERM "${pid}" >/dev/null 2>&1 || true
+    fi
   fi
   sleep 1
   rm -rf "${BOX_RUN_DIR}" "${BOX_VAR_DIR}" "${BOX_LOG_DIR}"
