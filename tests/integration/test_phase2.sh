@@ -331,6 +331,7 @@ run_firewall_mode_case() {
   assert_contains "${status_json}" "\"cap_ipv6\":false"
   assert_contains "${status_json}" "\"dry_run_supported\":true"
   assert_contains "${status_json}" "\"last_error\":\"\""
+  assert_not_contains "${status_json}" "\"error\":"
   assert_contains "${status_json}" "\"tailscale_iface\":\"tailscale0\""
   assert_contains "${status_json}" "\"tailscale_mark_rule\":true"
   assert_contains "${status_json}" "\"tailscale_table_present\":true"
@@ -348,25 +349,25 @@ run_firewall_mode_case() {
   assert_no_box_artifacts
 }
 
-printf '[1/10] firewall mode/dns apply+renew+disable idempotency (preserve_tailnet)\n'
+printf '[1/11] firewall mode/dns apply+renew+disable idempotency (preserve_tailnet)\n'
 run_firewall_mode_case "tun" "disable" "preserve_tailnet" "100" "iptables"
 run_firewall_mode_case "tproxy" "tproxy" "preserve_tailnet" "100" "iptables"
 run_firewall_mode_case "redirect" "redirect" "preserve_tailnet" "100" "iptables"
 run_firewall_mode_case "mixed" "tproxy" "preserve_tailnet" "100" "iptables"
 run_firewall_mode_case "enhance" "redirect" "preserve_tailnet" "100" "iptables"
 
-printf '[2/10] nftables backend mode/dns apply+renew+disable idempotency (preserve_tailnet)\n'
+printf '[2/11] nftables backend mode/dns apply+renew+disable idempotency (preserve_tailnet)\n'
 run_firewall_mode_case "tun" "disable" "preserve_tailnet" "100" "nftables"
 run_firewall_mode_case "tproxy" "tproxy" "preserve_tailnet" "100" "nftables"
 run_firewall_mode_case "redirect" "redirect" "preserve_tailnet" "100" "nftables"
 run_firewall_mode_case "mixed" "tproxy" "preserve_tailnet" "100" "nftables"
 run_firewall_mode_case "enhance" "redirect" "preserve_tailnet" "100" "nftables"
 
-printf '[3/10] coexist mode strict_box rule differences\n'
+printf '[3/11] coexist mode strict_box rule differences\n'
 run_firewall_mode_case "tproxy" "tproxy" "strict_box" "100" "iptables"
 run_firewall_mode_case "tproxy" "tproxy" "strict_box" "100" "nftables"
 
-printf '[4/10] route_pref convergence across renew\n'
+printf '[4/11] route_pref convergence across renew\n'
 write_config "mihomo" "tproxy" "tproxy" "${MIHOMO_SOURCE}" "preserve_tailnet" "100" "iptables"
 seed_tailscale_state
 must_run firewall enable >/dev/null
@@ -378,13 +379,13 @@ must_run firewall disable >/dev/null
 assert_tailscale_state_preserved
 assert_no_box_artifacts
 
-printf '[5/10] firewall dry-run surfaces intended operations\n'
+printf '[5/11] firewall dry-run surfaces intended operations\n'
 write_config "mihomo" "tproxy" "tproxy" "${MIHOMO_SOURCE}" "preserve_tailnet" "100" "nftables"
 dryrun_output="$(must_run firewall dry-run)"
 assert_contains "${dryrun_output}" "dry-run"
 assert_contains "${dryrun_output}" "backend=nftables"
 
-printf '[6/10] trace mode logs external commands with action context\n'
+printf '[6/11] trace mode logs external commands with action context\n'
 BOX_TRACE_COMMANDS=1
 export BOX_TRACE_COMMANDS
 trace_output="$(must_run firewall status --json)"
@@ -393,7 +394,7 @@ assert_contains "${trace_output}" "event_id=TRACE_CMD"
 assert_contains "${trace_output}" "action=status"
 assert_contains "${trace_output}" "cmd="
 
-printf '[7/10] explicit BOX_CONFIG_FILE missing fails fast\n'
+printf '[7/11] explicit BOX_CONFIG_FILE missing fails fast\n'
 missing_cfg="${TMP_DIR}/missing-explicit-box.toml"
 BOX_CONFIG_FILE="${missing_cfg}"
 export BOX_CONFIG_FILE
@@ -402,7 +403,18 @@ assert_contains "${fail_output}" "explicit BOX_CONFIG_FILE does not exist"
 BOX_CONFIG_FILE="${CONFIG_FILE}"
 export BOX_CONFIG_FILE
 
-printf '[8/10] service status side-effect free\n'
+printf '[8/11] status json conditional error field\n'
+write_config "mihomo" "tun" "disable" "${MIHOMO_SOURCE}" "preserve_tailnet" "100" "iptables"
+saved_iptables_cmd="${BOX_IPTABLES_CMD}"
+BOX_IPTABLES_CMD="${TMP_DIR}/missing-iptables"
+export BOX_IPTABLES_CMD
+error_status_json="$(must_run firewall status --json)"
+assert_contains "${error_status_json}" "\"last_error\":\"iptables inspection unavailable (need root/CAP_NET_ADMIN or kernel support)\""
+assert_contains "${error_status_json}" "\"error\":\"iptables inspection unavailable (need root/CAP_NET_ADMIN or kernel support)\""
+BOX_IPTABLES_CMD="${saved_iptables_cmd}"
+export BOX_IPTABLES_CMD
+
+printf '[9/11] service status side-effect free\n'
 write_config "mihomo" "tun" "disable" "${MIHOMO_SOURCE}" "preserve_tailnet" "100" "iptables"
 rm -rf "${BOX_RUN_DIR}/rendered"
 must_run service status --json >/dev/null
@@ -411,7 +423,7 @@ if [[ -d "${BOX_RUN_DIR}/rendered" ]]; then
   exit 1
 fi
 
-printf '[9/10] service lifecycle + mihomo overlay\n'
+printf '[10/11] service lifecycle + mihomo overlay\n'
 write_config "mihomo" "mixed" "redirect" "${MIHOMO_SOURCE}" "preserve_tailnet" "100" "iptables"
 seed_tailscale_state
 mihomo_checksum_before="$(sha256sum "${MIHOMO_SOURCE}" | awk '{print $1}')"
@@ -435,7 +447,7 @@ assert_tailscale_state_preserved
 service_json="$(must_run service status --json)"
 assert_contains "${service_json}" "\"status\":\"stopped\""
 
-printf '[10/10] service lifecycle + sing-box overlay\n'
+printf '[11/11] service lifecycle + sing-box overlay\n'
 write_config "sing-box" "tproxy" "tproxy" "${SING_SOURCE}" "preserve_tailnet" "100" "iptables"
 seed_tailscale_state
 sing_checksum_before="$(sha256sum "${SING_SOURCE}" | awk '{print $1}')"
