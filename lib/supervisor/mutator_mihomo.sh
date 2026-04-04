@@ -4,13 +4,20 @@
 
 set -euo pipefail
 
+bool_literal() {
+  case "${1:-}" in
+    true|1) printf 'true\n' ;;
+    *) printf 'false\n' ;;
+  esac
+}
+
 yaml_set_scalar() {
   local file="${1:?missing file}"
   local key="${2:?missing key}"
   local value="${3:?missing value}"
 
-  if grep -Eq "^[[:space:]]*${key}:" "${file}"; then
-    sed -i -E "s|^[[:space:]]*${key}:.*$|${key}: ${value}|" "${file}"
+  if grep -Eq "^${key}:" "${file}"; then
+    sed -i -E "s|^${key}:.*$|${key}: ${value}|" "${file}"
   else
     printf '%s: %s\n' "${key}" "${value}" >>"${file}"
   fi
@@ -21,7 +28,7 @@ yaml_set_scalar_if_missing() {
   local key="${2:?missing key}"
   local value="${3:?missing value}"
 
-  if ! grep -Eq "^[[:space:]]*${key}:" "${file}"; then
+  if ! grep -Eq "^${key}:" "${file}"; then
     printf '%s: %s\n' "${key}" "${value}" >>"${file}"
   fi
 }
@@ -208,9 +215,15 @@ EOF
   yaml_set_scalar "${rendered_file}" "redir-port" "${BOX_REDIR_PORT}"
   yaml_set_scalar "${rendered_file}" "tproxy-port" "${BOX_TPROXY_PORT}"
   yaml_set_scalar "${rendered_file}" "allow-lan" "true"
+  yaml_set_scalar "${rendered_file}" "ipv6" "$(bool_literal "${BOX_IPV6_ENABLED}")"
   yaml_set_scalar_if_missing "${rendered_file}" "external-controller" "\"127.0.0.1:9090\""
   yaml_set_scalar_if_missing "${rendered_file}" "external-ui" "\"./dashboard\""
   yaml_set_scalar_if_missing "${rendered_file}" "external-ui-url" "\"https://github.com/Zephyruso/zashboard/releases/latest/download/dist.zip\""
+  yaml_set_section_scalar "${rendered_file}" "dns" "ipv6" "$(bool_literal "${BOX_IPV6_ENABLED}")"
+  yaml_set_section_scalar "${rendered_file}" "dns" "enhanced-mode" "${BOX_DNS_ENHANCED_MODE}"
+  if [[ "${BOX_DNS_ENHANCED_MODE}" == "fake-ip" && "$(bool_literal "${BOX_IPV6_ENABLED}")" == "true" ]]; then
+    yaml_set_section_scalar "${rendered_file}" "dns" "fake-ip-range6" "\"fc00::/18\""
+  fi
 
   if [[ "${BOX_NETWORK_MODE}" == "tun" ]]; then
     yaml_set_section_scalar "${rendered_file}" "tun" "enable" "true"
@@ -224,7 +237,7 @@ EOF
     yaml_set_section_scalar "${rendered_file}" "tun" "strict-route" "false"
   fi
 
-  if [[ "${BOX_DNS_COEXIST_MODE}" == "preserve_tailnet" ]]; then
+  if [[ "${BOX_DNS_COEXIST_MODE}" == "preserve_tailnet" && "${BOX_DNS_ENHANCED_MODE}" == "fake-ip" ]]; then
     yaml_mihomo_ensure_dns_fake_ip_filter_item "${rendered_file}" "+.tailscale.com"
     yaml_mihomo_ensure_dns_fake_ip_filter_item "${rendered_file}" "+.ts.net"
   fi
@@ -232,6 +245,7 @@ EOF
   {
     printf '# box overlay (runtime only)\n'
     printf '# network_mode=%s\n' "${BOX_NETWORK_MODE}"
-    printf '# dns_hijack_mode=%s dns_port=%s\n' "${BOX_DNS_HIJACK_MODE}" "${BOX_DNS_PORT}"
+    printf '# dns_hijack_mode=%s dns_enhanced_mode=%s dns_port=%s\n' "${BOX_DNS_HIJACK_MODE}" "${BOX_DNS_ENHANCED_MODE}" "${BOX_DNS_PORT}"
+    printf '# ipv6_enabled=%s\n' "$(bool_literal "${BOX_IPV6_ENABLED}")"
   } >>"${rendered_file}"
 }

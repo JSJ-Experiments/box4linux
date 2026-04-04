@@ -215,6 +215,63 @@ backend_nft_record_failure_artifacts() {
     "nft failure artifacts written ruleset=${ruleset_path} stderr=${error_path}"
 }
 
+backend_nft_format_cidrs() {
+  local first=1 cidr
+  while IFS= read -r cidr; do
+    [[ -n "${cidr}" ]] || continue
+    if [[ "${first}" == "1" ]]; then
+      printf '%s' "${cidr}"
+      first=0
+    else
+      printf ', %s' "${cidr}"
+    fi
+  done
+}
+
+backend_nft_build_bypass_sets() {
+  local private_elements="" cn_elements=""
+
+  if firewall_bool_enabled "${BOX_BYPASS_PRIVATE_IP:-false}"; then
+    private_elements="$(firewall_private_ipv4_cidrs | backend_nft_format_cidrs)"
+    if [[ -n "${private_elements}" ]]; then
+      cat <<EOF
+add set inet ${BOX_NFT_TABLE_INET} box_private_v4 { type ipv4_addr; flags interval; elements = { ${private_elements} } }
+add set ip ${BOX_NFT_TABLE_IP} box_private_v4 { type ipv4_addr; flags interval; elements = { ${private_elements} } }
+EOF
+    fi
+  fi
+
+  if firewall_bool_enabled "${BOX_BYPASS_CN_IP:-false}"; then
+    if ! cn_elements="$(firewall_load_cn_ipv4_cidrs | backend_nft_format_cidrs)"; then
+      return "${E_FIREWALL_APPLY}"
+    fi
+    if [[ -z "${cn_elements}" ]]; then
+      FW_LAST_ERROR="CN bypass CIDR list is empty: ${BOX_BYPASS_CN_FILE}"
+      return "${E_FIREWALL_APPLY}"
+    fi
+    cat <<EOF
+add set inet ${BOX_NFT_TABLE_INET} box_cn_v4 { type ipv4_addr; flags interval; elements = { ${cn_elements} } }
+add set ip ${BOX_NFT_TABLE_IP} box_cn_v4 { type ipv4_addr; flags interval; elements = { ${cn_elements} } }
+EOF
+  fi
+}
+
+backend_nft_build_bypass_rules() {
+  if firewall_bool_enabled "${BOX_BYPASS_PRIVATE_IP:-false}"; then
+    cat <<EOF
+add rule inet ${BOX_NFT_TABLE_INET} box_main ip daddr @box_private_v4 return
+add rule ip ${BOX_NFT_TABLE_IP} box_main ip daddr @box_private_v4 return
+EOF
+  fi
+
+  if firewall_bool_enabled "${BOX_BYPASS_CN_IP:-false}"; then
+    cat <<EOF
+add rule inet ${BOX_NFT_TABLE_INET} box_main ip daddr @box_cn_v4 return
+add rule ip ${BOX_NFT_TABLE_IP} box_main ip daddr @box_cn_v4 return
+EOF
+  fi
+}
+
 backend_nft_build_ruleset() {
   local mode="${1:?missing mode}"
   local mark_value tailscale_mark tailscale_mask
@@ -234,7 +291,6 @@ add rule inet ${BOX_NFT_TABLE_INET} output jump box_main
 add rule inet ${BOX_NFT_TABLE_INET} box_main jump box_dns
 add rule inet ${BOX_NFT_TABLE_INET} box_main iifname "lo" return
 add rule inet ${BOX_NFT_TABLE_INET} box_main ip daddr 127.0.0.0/8 return
-add rule inet ${BOX_NFT_TABLE_INET} box_main return comment "BOX_POLICY_PLACEHOLDER"
 add table ip ${BOX_NFT_TABLE_IP}
 add chain ip ${BOX_NFT_TABLE_IP} prerouting { type nat hook prerouting priority dstnat; policy accept; }
 add chain ip ${BOX_NFT_TABLE_IP} output { type nat hook output priority -100; policy accept; }
@@ -247,6 +303,9 @@ add rule ip ${BOX_NFT_TABLE_IP} box_main jump box_dns
 add rule ip ${BOX_NFT_TABLE_IP} box_main iifname "lo" return
 add rule ip ${BOX_NFT_TABLE_IP} box_main ip daddr 127.0.0.0/8 return
 EOF
+
+  backend_nft_build_bypass_sets || return "${E_FIREWALL_APPLY}"
+  backend_nft_build_bypass_rules || return "${E_FIREWALL_APPLY}"
 
   if [[ "${BOX_DNS_COEXIST_MODE}" == "preserve_tailnet" ]]; then
     cat <<EOF
@@ -292,6 +351,8 @@ EOF
       return "${E_FIREWALL_APPLY}"
       ;;
   esac
+
+  printf 'add rule inet %s box_main return comment "BOX_POLICY_PLACEHOLDER"\n' "${BOX_NFT_TABLE_INET}"
 
   case "${BOX_DNS_HIJACK_MODE}" in
     disable)

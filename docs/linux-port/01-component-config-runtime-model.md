@@ -55,9 +55,12 @@ Under `/var/log/box/`:
 
 ## Validation Rules
 - `network_mode` in `{tun,tproxy,redirect,mixed,enhance}`
+- `dns_enhanced_mode` in `{fake-ip,redir-host}`
+- `ipv6` in `{true,false,1,0}`
 - `proxy_mode` in `{core,blacklist,whitelist}`
 - Port ranges 1..65535 and no collision with reserved core APIs.
-- If `bypass_cn_ip=true`, require ipset availability at runtime.
+- If `bypass_cn_ip=true`, require a readable IPv4 CIDR file (`bypass_cn_file`) at runtime.
+- `bypass_private_ip=true` is safe as a default and should install early kernel bypass rules for RFC1918/link-local/loopback/reserved IPv4 ranges.
 
 ## Compatibility Warnings From Current Scripts
 Observed issues worth fixing in Linux schema/loader:
@@ -81,7 +84,9 @@ mode = "tun"
 tproxy_port = 9898
 redir_port = 9797
 dns_hijack_mode = "tproxy"
+dns_enhanced_mode = "fake-ip"
 dns_coexist_mode = "preserve_tailnet"
+ipv6 = true
 
 [policy]
 enabled = false
@@ -127,3 +132,12 @@ This snapshot is used by:
 - `updater.geo.preset = "auto"` derives the correct MetaCubeX bundle for the selected core
 - GitHub-backed updater downloads can be mirrored via `use_ghproxy = true`
 - subscription updates prefer controller API reload when the rendered config exposes a controller endpoint
+
+## IPv6 Runtime Notes
+- Linux-native config follows the reference boolean model with `network.ipv6 = true|false`.
+- There is no separate `prefer_ipv4|prefer_ipv6|default` selector in the reference tree.
+- Current Linux-native effective behavior is:
+  - `mode=tun` + `ipv6=true`: IPv6 is handled by the core TUN path.
+  - `mode!=tun` + `ipv6=true`: IPv6 remains direct because the firewall graph is still IPv4-only.
+  - `ipv6=false`: runtime disables IPv6 in the core/DNS layer so clients fall back to IPv4.
+- `network.dns_enhanced_mode = "fake-ip" | "redir-host"` is exposed explicitly for Mihomo overlay rendering.

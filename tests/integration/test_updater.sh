@@ -149,10 +149,11 @@ write_common_config() {
   local core="${1:?missing core}"
   local source="${2:?missing source}"
   local updater_block="${3:-}"
+  local bin_dir="${4:-${ACTIVE_MOCK_DIR}}"
   cat >"${CONFIG_FILE}" <<EOF_CFG
 [core]
 selected = "${core}"
-bin_dir = "${INSTALLED_BIN_DIR}"
+bin_dir = "${bin_dir}"
 workdir = "${BOX_VAR_DIR}"
 config_source = "${source}"
 
@@ -208,6 +209,11 @@ EOF_GEO1
 cat >"${SOURCE_DIR}/geo-v2.dat" <<'EOF_GEO2'
 geo-version-2
 EOF_GEO2
+
+cat >"${SOURCE_DIR}/china_ipv4.txt" <<'EOF_CN'
+1.0.1.0/24
+101.6.0.0/16
+EOF_CN
 
 cat >"${PROFILE_DIR}/mihomo-live.yaml" <<'EOF_MIHOMO_LIVE'
 mode: rule
@@ -584,6 +590,7 @@ printf '[14/19] geo preset installs metacubex mihomo bundle\n'
 cat >"${MOCK_CURL_MAP_FILE}" <<EOF_GEO_PRESET_MAP
 https://github.com/MetaCubeX/meta-rules-dat/raw/release/country-lite.mmdb	${SOURCE_DIR}/geo-v1.dat
 https://github.com/MetaCubeX/meta-rules-dat/raw/release/geosite.dat	${SOURCE_DIR}/geo-v2.dat
+https://metowolf.github.io/iplist/data/country/CN.txt	${SOURCE_DIR}/china_ipv4.txt
 EOF_GEO_PRESET_MAP
 write_common_config "mihomo" "${PROFILE_DIR}/mihomo-live.yaml" "[updater.geo]
 preset = \"metacubex_mihomo\"
@@ -591,6 +598,7 @@ target = \"${ARTIFACT_DIR}/geo-preset\""
 must_run update geo >/dev/null
 assert_file_contains "${ARTIFACT_DIR}/geo-preset/Country.mmdb" 'geo-version-1'
 assert_file_contains "${ARTIFACT_DIR}/geo-preset/GeoSite.dat" 'geo-version-2'
+assert_file_contains "${ARTIFACT_DIR}/geo-preset/china_ipv4.txt" '101.6.0.0/16'
 status_json="$(must_run update status --json)"
 assert_contains "${status_json}" "\"target_path\":\"${ARTIFACT_DIR}/geo-preset\""
 assert_contains "${status_json}" '"geo":{"configured":true,"status":"success"'
@@ -646,7 +654,7 @@ PATH="${ACTIVE_MOCK_DIR}:/usr/bin:/bin"
 write_common_config "mihomo" "${PROFILE_DIR}/mihomo-live.yaml" "[updater.kernel]
 file = \"${SOURCE_DIR}/kernel-bad\"
 checksum = \"$(sha256_of "${SOURCE_DIR}/kernel-bad")\"
-target = \"${INSTALLED_BIN_DIR}/mihomo\""
+target = \"${INSTALLED_BIN_DIR}/mihomo\"" "${INSTALLED_BIN_DIR}"
 must_run service start >/dev/null
 recovery_pid_before="$(service_pid)"
 must_fail update kernel >/dev/null

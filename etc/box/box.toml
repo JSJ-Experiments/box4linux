@@ -10,7 +10,9 @@ tproxy_port = 9898
 redir_port = 9797
 dns_port = 1053
 dns_hijack_mode = "redirect"
+dns_enhanced_mode = "fake-ip"
 dns_coexist_mode = "preserve_tailnet"
+ipv6 = true
 tailscale_iface = "tailscale0"
 tailnet_ipv4_cidr = "100.64.0.0/10"
 tailnet_ipv6_cidr = "fd7a:115c:a1e0::/48"
@@ -23,6 +25,9 @@ backend = "nftables"
 route_table = 2024
 route_pref = 100
 fwmark = "16777216/16777216"
+bypass_private_ip = true
+bypass_cn_ip = false
+bypass_cn_file = "/var/lib/box/china_ipv4.txt"
 
 [policy]
 enabled = false

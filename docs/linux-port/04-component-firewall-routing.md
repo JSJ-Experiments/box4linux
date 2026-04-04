@@ -72,6 +72,15 @@ If unsupported, apply controlled downgrade with explicit logs.
 - Do not hardcode interface names like `wlan0`.
 - Make route table id configurable to avoid collisions.
 
+## Current IPv6 Scope
+- Linux-native transparent interception is still IPv4-only for `iptables` and `nftables`.
+- `boxctl firewall status --json` reports this as `cap_ipv6=false`.
+- Effective runtime behavior today is:
+  - `mode=tun` + `network.ipv6=true`: IPv6 is proxied by the core TUN stack.
+  - non-`tun` modes + `network.ipv6=true`: IPv6 remains direct outside the firewall graph.
+  - `network.ipv6=false`: runtime disables IPv6 in the core/DNS path to prefer IPv4.
+- `network.dns_enhanced_mode` controls Mihomo DNS `fake-ip` vs `redir-host` independently from firewall mode.
+
 ## Tailscale Coexistence Requirements
 For hosts that run Tailscale alongside Box, firewall apply/cleanup must preserve Tailscale routing and DNS behavior.
 
@@ -103,7 +112,7 @@ DNS guidance:
 1. capability probe
 2. cleanup old BOX-owned state
 3. create base chains
-4. apply anti-loop and intranet bypass
+4. apply anti-loop and early kernel bypass (`private_ip`, optional `cn_ip`, tailscale coexist)
 5. apply owner/interface/mac policies
 6. apply mode-specific redirect/tproxy actions
 7. apply DNS strategy rules
@@ -125,7 +134,8 @@ If any step fails:
 - `nf_tproxy_core`
 - commands present:
 - `iptables`/`ip6tables` or `nft`
-- `ip`, `sysctl`, `ipset` (optional)
+- `ip`, `sysctl`
+- `ipset` optional if the iptables backend later adopts set-backed acceleration; current Linux-native path must not depend on Android-only tooling
 
 ## Observability
 Expose `boxctl firewall status --json` with:

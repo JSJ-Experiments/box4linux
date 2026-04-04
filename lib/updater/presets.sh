@@ -134,14 +134,17 @@ updater_geo_emit_manifest() {
     metacubex_mihomo)
       printf 'Country.mmdb\thttps://github.com/MetaCubeX/meta-rules-dat/raw/release/country-lite.mmdb\t%s/Country.mmdb\n' "${target_root}"
       printf 'GeoSite.dat\thttps://github.com/MetaCubeX/meta-rules-dat/raw/release/geosite.dat\t%s/GeoSite.dat\n' "${target_root}"
+      printf 'china_ipv4.txt\thttps://metowolf.github.io/iplist/data/country/CN.txt\t%s/china_ipv4.txt\n' "${target_root}"
       ;;
     metacubex_sing_box)
       printf 'geoip.db\thttps://github.com/MetaCubeX/meta-rules-dat/raw/release/geoip-lite.db\t%s/geoip.db\n' "${target_root}"
       printf 'geosite.db\thttps://github.com/MetaCubeX/meta-rules-dat/raw/release/geosite.db\t%s/geosite.db\n' "${target_root}"
+      printf 'china_ipv4.txt\thttps://metowolf.github.io/iplist/data/country/CN.txt\t%s/china_ipv4.txt\n' "${target_root}"
       ;;
     metacubex_legacy)
       printf 'geoip.dat\thttps://github.com/MetaCubeX/meta-rules-dat/raw/release/geoip-lite.dat\t%s/geoip.dat\n' "${target_root}"
       printf 'geosite.dat\thttps://github.com/MetaCubeX/meta-rules-dat/raw/release/geosite.dat\t%s/geosite.dat\n' "${target_root}"
+      printf 'china_ipv4.txt\thttps://metowolf.github.io/iplist/data/country/CN.txt\t%s/china_ipv4.txt\n' "${target_root}"
       ;;
     *)
       log "ERROR" "updater" "E_UPDATE_PRESET" "unsupported geo preset: ${preset}"

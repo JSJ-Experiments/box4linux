@@ -9,6 +9,8 @@ mutator_sing_box_write_overlay_env() {
   cat >"${rendered_file}.overlay.env" <<EOF
 network_mode=${BOX_NETWORK_MODE}
 dns_hijack_mode=${BOX_DNS_HIJACK_MODE}
+dns_enhanced_mode=${BOX_DNS_ENHANCED_MODE}
+ipv6_enabled=${BOX_IPV6_ENABLED}
 tproxy_port=${BOX_TPROXY_PORT}
 redir_port=${BOX_REDIR_PORT}
 dns_port=${BOX_DNS_PORT}
@@ -23,6 +25,8 @@ mutator_sing_box_render_overlay() {
     jq \
       --arg mode "${BOX_NETWORK_MODE}" \
       --arg dns_mode "${BOX_DNS_HIJACK_MODE}" \
+      --arg dns_enhanced_mode "${BOX_DNS_ENHANCED_MODE}" \
+      --arg ipv6_enabled "${BOX_IPV6_ENABLED}" \
       --argjson tproxy_port "${BOX_TPROXY_PORT}" \
       --argjson redir_port "${BOX_REDIR_PORT}" \
       --argjson dns_port "${BOX_DNS_PORT}" \
@@ -37,11 +41,13 @@ mutator_sing_box_render_overlay() {
             "external_ui": (.experimental.clash_api.external_ui // $external_ui),
             "external_ui_download_url": (.experimental.clash_api.external_ui_download_url // $external_ui_download_url)
           }),
-          "box_overlay": {
-            "network_mode": $mode,
-            "dns_hijack_mode": $dns_mode,
-            "tproxy_port": $tproxy_port,
-            "redir_port": $redir_port,
+            "box_overlay": {
+              "network_mode": $mode,
+              "dns_hijack_mode": $dns_mode,
+              "dns_enhanced_mode": $dns_enhanced_mode,
+              "ipv6_enabled": $ipv6_enabled,
+              "tproxy_port": $tproxy_port,
+              "redir_port": $redir_port,
             "dns_port": $dns_port
           }
         })

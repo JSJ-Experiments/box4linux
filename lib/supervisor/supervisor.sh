@@ -308,6 +308,9 @@ service_print_status_text() {
   printf 'pid=%s\n' "${pid:-0}"
   printf 'mode=%s\n' "${BOX_NETWORK_MODE}"
   printf 'dns_hijack_mode=%s\n' "${BOX_DNS_HIJACK_MODE}"
+  printf 'dns_enhanced_mode=%s\n' "${BOX_DNS_ENHANCED_MODE}"
+  printf 'ipv6_enabled=%s\n' "${BOX_IPV6_ENABLED}"
+  printf 'ipv6_effective_mode=%s\n' "$(firewall_ipv6_effective_mode)"
   printf 'rendered_config=%s\n' "${rendered_path}"
   printf 'config=%s\n' "${BOX_CONFIG_FILE:-none}"
 }
@@ -316,12 +319,15 @@ service_print_status_json() {
   local status="${1:?missing status}"
   local pid="${2:-0}"
   local rendered_path="${3:-}"
-  printf '{%s,%s,%s,%s,%s,%s,%s}\n' \
+  printf '{%s,%s,%s,%s,%s,%s,%s,%s,%s,%s}\n' \
     "$(json_pair "status" "${status}")" \
     "$(json_pair "core" "${BOX_CORE}")" \
     "$(json_num_pair "pid" "${pid:-0}")" \
     "$(json_pair "mode" "${BOX_NETWORK_MODE}")" \
     "$(json_pair "dns_hijack_mode" "${BOX_DNS_HIJACK_MODE}")" \
+    "$(json_pair "dns_enhanced_mode" "${BOX_DNS_ENHANCED_MODE}")" \
+    "$(json_bool_pair "ipv6_enabled" "${BOX_IPV6_ENABLED}")" \
+    "$(json_pair "ipv6_effective_mode" "$(firewall_ipv6_effective_mode)")" \
     "$(json_pair "rendered_config" "${rendered_path}")" \
     "$(json_pair "config" "${BOX_CONFIG_FILE:-none}")"
 }

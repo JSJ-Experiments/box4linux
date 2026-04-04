@@ -14,7 +14,9 @@ BOX_TPROXY_PORT=""
 BOX_REDIR_PORT=""
 BOX_DNS_PORT=""
 BOX_DNS_HIJACK_MODE=""
+BOX_DNS_ENHANCED_MODE=""
 BOX_DNS_COEXIST_MODE=""
+BOX_IPV6_ENABLED=""
 BOX_TAILSCALE_IFACE=""
 BOX_TAILNET_IPV4_CIDR=""
 BOX_TAILNET_IPV6_CIDR=""
@@ -26,6 +28,9 @@ BOX_FIREWALL_BACKEND=""
 BOX_ROUTE_TABLE=""
 BOX_ROUTE_PREF=""
 BOX_FWMARK=""
+BOX_BYPASS_PRIVATE_IP=""
+BOX_BYPASS_CN_IP=""
+BOX_BYPASS_CN_FILE=""
 
 BOX_POLICY_ENABLED=""
 BOX_POLICY_PROXY_MODE=""
@@ -106,7 +111,9 @@ config_defaults() {
   BOX_REDIR_PORT="9797"
   BOX_DNS_PORT="1053"
   BOX_DNS_HIJACK_MODE="tproxy"
+  BOX_DNS_ENHANCED_MODE="fake-ip"
   BOX_DNS_COEXIST_MODE="preserve_tailnet"
+  BOX_IPV6_ENABLED="true"
   BOX_TAILSCALE_IFACE="tailscale0"
   BOX_TAILNET_IPV4_CIDR="100.64.0.0/10"
   BOX_TAILNET_IPV6_CIDR="fd7a:115c:a1e0::/48"
@@ -117,6 +124,9 @@ config_defaults() {
   BOX_ROUTE_TABLE="2024"
   BOX_ROUTE_PREF="100"
   BOX_FWMARK="16777216/16777216"
+  BOX_BYPASS_PRIVATE_IP="true"
+  BOX_BYPASS_CN_IP="false"
+  BOX_BYPASS_CN_FILE="${BOX_VAR_DIR_DEFAULT}/china_ipv4.txt"
   BOX_POLICY_ENABLED="false"
   BOX_POLICY_PROXY_MODE="core"
   BOX_POLICY_DEBOUNCE_SECONDS="3"
@@ -420,6 +430,21 @@ validate_config() {
       ;;
   esac
 
+  case "${BOX_DNS_ENHANCED_MODE}" in
+    fake-ip|redir-host) ;;
+    *)
+      log "ERROR" "config" "E_CONFIG_DNS_ENHANCED_MODE" \
+        "invalid dns_enhanced_mode: ${BOX_DNS_ENHANCED_MODE}"
+      return "${E_CONFIG}"
+      ;;
+  esac
+
+  if ! validate_bool_string "${BOX_IPV6_ENABLED}"; then
+    log "ERROR" "config" "E_CONFIG_IPV6" \
+      "network ipv6 must be true|false|1|0: ${BOX_IPV6_ENABLED}"
+    return "${E_CONFIG}"
+  fi
+
   case "${BOX_DNS_COEXIST_MODE}" in
     preserve_tailnet|strict_box) ;;
     *)
@@ -466,6 +491,26 @@ validate_config() {
       return "${E_CONFIG}"
       ;;
   esac
+
+  if ! validate_bool_string "${BOX_BYPASS_PRIVATE_IP}"; then
+    log "ERROR" "config" "E_CONFIG_BYPASS_PRIVATE" \
+      "firewall bypass_private_ip must be true|false|1|0: ${BOX_BYPASS_PRIVATE_IP}"
+    return "${E_CONFIG}"
+  fi
+
+  if ! validate_bool_string "${BOX_BYPASS_CN_IP}"; then
+    log "ERROR" "config" "E_CONFIG_BYPASS_CN" \
+      "firewall bypass_cn_ip must be true|false|1|0: ${BOX_BYPASS_CN_IP}"
+    return "${E_CONFIG}"
+  fi
+
+  if [[ "${BOX_BYPASS_CN_IP}" == "true" || "${BOX_BYPASS_CN_IP}" == "1" ]]; then
+    if [[ -z "${BOX_BYPASS_CN_FILE}" ]]; then
+      log "ERROR" "config" "E_CONFIG_BYPASS_CN_FILE" \
+        "firewall bypass_cn_file must not be empty when bypass_cn_ip is enabled"
+      return "${E_CONFIG}"
+    fi
+  fi
 
   if ! validate_bool_string "${BOX_POLICY_ENABLED}"; then
     log "ERROR" "config" "E_CONFIG_POLICY_ENABLED" "policy.enabled must be true|false|1|0: ${BOX_POLICY_ENABLED}"
@@ -610,9 +655,9 @@ load_config() {
     log "WARN" "config" "W_CONFIG_DEFAULTS" "no box.toml found; using defaults"
     validate_config
     export BOX_CONFIG_FILE BOX_CONFIG_SOURCE
-    export BOX_CORE BOX_NETWORK_MODE BOX_TPROXY_PORT BOX_REDIR_PORT BOX_DNS_PORT BOX_DNS_HIJACK_MODE BOX_DNS_COEXIST_MODE
+    export BOX_CORE BOX_NETWORK_MODE BOX_TPROXY_PORT BOX_REDIR_PORT BOX_DNS_PORT BOX_DNS_HIJACK_MODE BOX_DNS_ENHANCED_MODE BOX_DNS_COEXIST_MODE BOX_IPV6_ENABLED
     export BOX_TAILSCALE_IFACE BOX_TAILNET_IPV4_CIDR BOX_TAILNET_IPV6_CIDR BOX_TAILSCALE_DNS_RESOLVER BOX_TAILSCALE_FWMARK BOX_TAILSCALE_ROUTE_TABLE
-    export BOX_FIREWALL_BACKEND BOX_ROUTE_TABLE BOX_ROUTE_PREF BOX_FWMARK
+    export BOX_FIREWALL_BACKEND BOX_ROUTE_TABLE BOX_ROUTE_PREF BOX_FWMARK BOX_BYPASS_PRIVATE_IP BOX_BYPASS_CN_IP BOX_BYPASS_CN_FILE
     export BOX_POLICY_ENABLED BOX_POLICY_PROXY_MODE BOX_POLICY_DEBOUNCE_SECONDS BOX_POLICY_USE_MODULE_ON_WIFI_DISCONNECT BOX_POLICY_DISABLE_MARKER
     export BOX_CORE_BIN_DIR BOX_CORE_WORKDIR BOX_CORE_CONFIG_SOURCE
     export BOX_UPDATER_ARTIFACT_DIR BOX_UPDATER_STAGING_DIR BOX_UPDATER_CHECKSUM_POLICY
@@ -643,7 +688,9 @@ load_config() {
   BOX_REDIR_PORT="$(config_read_value "${BOX_CONFIG_FILE}" "network" "redir_port" || printf '%s' "${BOX_REDIR_PORT}")"
   BOX_DNS_PORT="$(config_read_value "${BOX_CONFIG_FILE}" "network" "dns_port" || printf '%s' "${BOX_DNS_PORT}")"
   BOX_DNS_HIJACK_MODE="$(config_read_value "${BOX_CONFIG_FILE}" "network" "dns_hijack_mode" || printf '%s' "${BOX_DNS_HIJACK_MODE}")"
+  BOX_DNS_ENHANCED_MODE="$(config_read_value "${BOX_CONFIG_FILE}" "network" "dns_enhanced_mode" || printf '%s' "${BOX_DNS_ENHANCED_MODE}")"
   BOX_DNS_COEXIST_MODE="$(config_read_value "${BOX_CONFIG_FILE}" "network" "dns_coexist_mode" || printf '%s' "${BOX_DNS_COEXIST_MODE}")"
+  BOX_IPV6_ENABLED="$(config_read_value "${BOX_CONFIG_FILE}" "network" "ipv6" || printf '%s' "${BOX_IPV6_ENABLED}")"
   BOX_TAILSCALE_IFACE="$(config_read_value "${BOX_CONFIG_FILE}" "network" "tailscale_iface" || printf '%s' "${BOX_TAILSCALE_IFACE}")"
   BOX_TAILNET_IPV4_CIDR="$(config_read_value "${BOX_CONFIG_FILE}" "network" "tailnet_ipv4_cidr" || printf '%s' "${BOX_TAILNET_IPV4_CIDR}")"
   BOX_TAILNET_IPV6_CIDR="$(config_read_value "${BOX_CONFIG_FILE}" "network" "tailnet_ipv6_cidr" || printf '%s' "${BOX_TAILNET_IPV6_CIDR}")"
@@ -655,6 +702,9 @@ load_config() {
   BOX_ROUTE_TABLE="$(config_read_value "${BOX_CONFIG_FILE}" "firewall" "route_table" || printf '%s' "${BOX_ROUTE_TABLE}")"
   BOX_ROUTE_PREF="$(config_read_value "${BOX_CONFIG_FILE}" "firewall" "route_pref" || printf '%s' "${BOX_ROUTE_PREF}")"
   BOX_FWMARK="$(config_read_value "${BOX_CONFIG_FILE}" "firewall" "fwmark" || printf '%s' "${BOX_FWMARK}")"
+  BOX_BYPASS_PRIVATE_IP="$(config_read_value "${BOX_CONFIG_FILE}" "firewall" "bypass_private_ip" || printf '%s' "${BOX_BYPASS_PRIVATE_IP}")"
+  BOX_BYPASS_CN_IP="$(config_read_value "${BOX_CONFIG_FILE}" "firewall" "bypass_cn_ip" || printf '%s' "${BOX_BYPASS_CN_IP}")"
+  BOX_BYPASS_CN_FILE="$(config_read_value "${BOX_CONFIG_FILE}" "firewall" "bypass_cn_file" || printf '%s' "${BOX_BYPASS_CN_FILE}")"
 
   BOX_POLICY_ENABLED="$(config_read_value "${BOX_CONFIG_FILE}" "policy" "enabled" || printf '%s' "${BOX_POLICY_ENABLED}")"
   BOX_POLICY_PROXY_MODE="$(config_read_value "${BOX_CONFIG_FILE}" "policy" "proxy_mode" || printf '%s' "${BOX_POLICY_PROXY_MODE}")"
@@ -738,9 +788,9 @@ load_config() {
   fi
 
   export BOX_CONFIG_FILE BOX_CONFIG_SOURCE
-  export BOX_CORE BOX_NETWORK_MODE BOX_TPROXY_PORT BOX_REDIR_PORT BOX_DNS_PORT BOX_DNS_HIJACK_MODE BOX_DNS_COEXIST_MODE
+  export BOX_CORE BOX_NETWORK_MODE BOX_TPROXY_PORT BOX_REDIR_PORT BOX_DNS_PORT BOX_DNS_HIJACK_MODE BOX_DNS_ENHANCED_MODE BOX_DNS_COEXIST_MODE BOX_IPV6_ENABLED
   export BOX_TAILSCALE_IFACE BOX_TAILNET_IPV4_CIDR BOX_TAILNET_IPV6_CIDR BOX_TAILSCALE_DNS_RESOLVER BOX_TAILSCALE_FWMARK BOX_TAILSCALE_ROUTE_TABLE
-  export BOX_FIREWALL_BACKEND BOX_ROUTE_TABLE BOX_ROUTE_PREF BOX_FWMARK
+  export BOX_FIREWALL_BACKEND BOX_ROUTE_TABLE BOX_ROUTE_PREF BOX_FWMARK BOX_BYPASS_PRIVATE_IP BOX_BYPASS_CN_IP BOX_BYPASS_CN_FILE
   export BOX_POLICY_ENABLED BOX_POLICY_PROXY_MODE BOX_POLICY_DEBOUNCE_SECONDS BOX_POLICY_USE_MODULE_ON_WIFI_DISCONNECT BOX_POLICY_DISABLE_MARKER
   export BOX_CORE_BIN_DIR BOX_CORE_WORKDIR BOX_CORE_CONFIG_SOURCE
   export BOX_UPDATER_ARTIFACT_DIR BOX_UPDATER_STAGING_DIR BOX_UPDATER_CHECKSUM_POLICY

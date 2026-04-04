@@ -288,6 +288,34 @@ backend_iptables_apply_anti_loop() {
   backend_iptables_add_rule_checked nat "${BOX_CHAIN_NAT}" -d 127.0.0.0/8 -j RETURN
 }
 
+backend_iptables_apply_cidr_bypass_list() {
+  local cidr_source="${1:?missing cidr source}"
+  local cidr
+
+  while IFS= read -r cidr; do
+    [[ -n "${cidr}" ]] || continue
+    backend_iptables_add_rule_checked mangle "${BOX_CHAIN_MANGLE}" -d "${cidr}" -j RETURN
+    backend_iptables_add_rule_checked nat "${BOX_CHAIN_NAT}" -d "${cidr}" -j RETURN
+  done < <(printf '%s\n' "${cidr_source}")
+}
+
+backend_iptables_apply_private_bypass() {
+  local private_cidrs
+  private_cidrs="$(firewall_private_ipv4_cidrs)"
+  [[ -n "${private_cidrs}" ]] || return 0
+  backend_iptables_apply_cidr_bypass_list "${private_cidrs}"
+}
+
+backend_iptables_apply_cn_bypass() {
+  local cn_cidrs
+  cn_cidrs="$(firewall_load_cn_ipv4_cidrs)" || return "${E_FIREWALL_APPLY}"
+  if [[ -z "${cn_cidrs}" ]]; then
+    FW_LAST_ERROR="CN bypass CIDR list is empty: ${BOX_BYPASS_CN_FILE}"
+    return "${E_FIREWALL_APPLY}"
+  fi
+  backend_iptables_apply_cidr_bypass_list "${cn_cidrs}"
+}
+
 backend_iptables_apply_tailscale_bypass() {
   # Preserve tailscale transport and route ownership.
   backend_iptables_add_rule_checked mangle "${BOX_CHAIN_MANGLE}" -i "${BOX_TAILSCALE_IFACE}" -j RETURN
@@ -311,9 +339,22 @@ backend_iptables_apply_tailscale_bypass() {
   # TODO(phase-3): add dedicated ip6tables/nft backend for explicit v6 chain rules.
 }
 
-backend_iptables_apply_policy_placeholders() {
-  # TODO(phase-3): UID/GID/interface/MAC policy graph.
-  backend_iptables_add_rule_checked mangle "${BOX_CHAIN_MANGLE}" -m comment --comment "BOX_POLICY_PLACEHOLDER" -j RETURN
+backend_iptables_apply_kernel_bypass() {
+  if firewall_bool_enabled "${BOX_BYPASS_PRIVATE_IP:-false}"; then
+    if ! backend_iptables_apply_private_bypass; then
+      FW_LAST_ERROR="${FW_LAST_ERROR:-failed to apply private IP bypass}"
+      return "${E_FIREWALL_APPLY}"
+    fi
+  fi
+
+  if firewall_bool_enabled "${BOX_BYPASS_CN_IP:-false}"; then
+    if ! backend_iptables_apply_cn_bypass; then
+      FW_LAST_ERROR="${FW_LAST_ERROR:-failed to apply CN IP bypass}"
+      return "${E_FIREWALL_APPLY}"
+    fi
+  fi
+
+  return 0
 }
 
 backend_iptables_ensure_policy_route() {
@@ -526,6 +567,12 @@ backend_iptables_apply_mode() {
     return "${E_FIREWALL_APPLY}"
   fi
 
+  if ! backend_iptables_apply_kernel_bypass; then
+    FW_LAST_ERROR="${FW_LAST_ERROR:-failed to apply kernel bypass rules}"
+    backend_iptables_cleanup || true
+    return "${E_FIREWALL_APPLY}"
+  fi
+
   if [[ "${BOX_DNS_COEXIST_MODE}" == "preserve_tailnet" ]]; then
     if ! backend_iptables_apply_tailscale_bypass; then
       FW_LAST_ERROR="failed to apply tailscale bypass"
@@ -537,14 +584,15 @@ backend_iptables_apply_mode() {
     FW_TAILSCALE_BYPASS_APPLIED="false"
   fi
 
-  if ! backend_iptables_apply_policy_placeholders; then
-    FW_LAST_ERROR="failed to apply policy placeholder rules"
+  if ! backend_iptables_apply_mode_rules "${mode}"; then
+    FW_LAST_ERROR="${FW_LAST_ERROR:-failed to apply mode rules}"
     backend_iptables_cleanup || true
     return "${E_FIREWALL_APPLY}"
   fi
 
-  if ! backend_iptables_apply_mode_rules "${mode}"; then
-    FW_LAST_ERROR="${FW_LAST_ERROR:-failed to apply mode rules}"
+  # TODO(phase-3): replace placeholder with real UID/GID/interface/MAC graph.
+  if ! backend_iptables_add_rule_checked mangle "${BOX_CHAIN_MANGLE}" -m comment --comment "BOX_POLICY_PLACEHOLDER" -j RETURN; then
+    FW_LAST_ERROR="failed to apply policy placeholder rules"
     backend_iptables_cleanup || true
     return "${E_FIREWALL_APPLY}"
   fi
@@ -560,7 +608,11 @@ backend_iptables_apply_mode() {
 
 backend_iptables_dry_run() {
   local mode="${1:?missing mode}"
+  local private_enabled cn_enabled
+  private_enabled="$(firewall_bool_enabled "${BOX_BYPASS_PRIVATE_IP:-false}" && printf 'true' || printf 'false')"
+  cn_enabled="$(firewall_bool_enabled "${BOX_BYPASS_CN_IP:-false}" && printf 'true' || printf 'false')"
   printf '# dry-run backend=iptables mode=%s dns=%s coexist=%s\n' "${mode}" "${BOX_DNS_HIJACK_MODE}" "${BOX_DNS_COEXIST_MODE}"
+  printf '# bypass private=%s cn=%s file=%s\n' "${private_enabled}" "${cn_enabled}" "${BOX_BYPASS_CN_FILE}"
   printf 'iptables -t mangle -D PREROUTING -j %s\n' "${BOX_CHAIN_MANGLE}"
   printf 'iptables -t mangle -D OUTPUT -j %s\n' "${BOX_CHAIN_MANGLE}"
   printf 'iptables -t nat -D PREROUTING -j %s\n' "${BOX_CHAIN_NAT}"
@@ -569,6 +621,20 @@ backend_iptables_dry_run() {
   printf 'iptables -t nat -A OUTPUT -m owner --uid-owner 0 -j RETURN\n'
   printf 'iptables -t mangle -N %s ; iptables -t nat -N %s\n' "${BOX_CHAIN_MANGLE}" "${BOX_CHAIN_NAT}"
   printf 'iptables -t mangle -N %s ; iptables -t nat -N %s\n' "${BOX_CHAIN_DNS_MANGLE}" "${BOX_CHAIN_DNS_NAT}"
+  if firewall_bool_enabled "${BOX_BYPASS_PRIVATE_IP:-false}"; then
+    while IFS= read -r cidr; do
+      [[ -n "${cidr}" ]] || continue
+      printf 'iptables -t mangle -A %s -d %s -j RETURN\n' "${BOX_CHAIN_MANGLE}" "${cidr}"
+      printf 'iptables -t nat -A %s -d %s -j RETURN\n' "${BOX_CHAIN_NAT}" "${cidr}"
+    done < <(firewall_private_ipv4_cidrs)
+  fi
+  if firewall_bool_enabled "${BOX_BYPASS_CN_IP:-false}"; then
+    while IFS= read -r cidr; do
+      [[ -n "${cidr}" ]] || continue
+      printf 'iptables -t mangle -A %s -d %s -j RETURN\n' "${BOX_CHAIN_MANGLE}" "${cidr}"
+      printf 'iptables -t nat -A %s -d %s -j RETURN\n' "${BOX_CHAIN_NAT}" "${cidr}"
+    done < <(firewall_load_cn_ipv4_cidrs)
+  fi
   printf 'iptables mode rules for %s and dns strategy %s\n' "${mode}" "${BOX_DNS_HIJACK_MODE}"
   printf 'ip rule add fwmark %s table %s pref %s\n' "${BOX_FWMARK}" "${BOX_ROUTE_TABLE}" "${BOX_ROUTE_PREF}"
   printf 'ip route add local default dev lo table %s\n' "${BOX_ROUTE_TABLE}"
