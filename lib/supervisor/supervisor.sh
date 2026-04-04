@@ -117,6 +117,27 @@ start_core_process() {
   esac
 }
 
+discover_core_pid() {
+  local rendered_path="${1:?missing rendered config path}"
+  local workdir="${2:?missing workdir}"
+  local discovered=""
+  case "${BOX_CORE}" in
+    mihomo)
+      discovered="$(ps -eo pid=,args= | awk -v rendered="${rendered_path}" '
+        index($0, "mihomo") > 0 && index($0, rendered) > 0 { pid=$1 }
+        END { if (pid != "") print pid }
+      ' | tail -n 1 || true)"
+      ;;
+    sing-box)
+      discovered="$(ps -eo pid=,args= | awk -v rendered="${rendered_path}" '
+        index($0, "sing-box") > 0 && index($0, rendered) > 0 { pid=$1 }
+        END { if (pid != "") print pid }
+      ' | tail -n 1 || true)"
+      ;;
+  esac
+  printf '%s\n' "${discovered}"
+}
+
 write_runtime_snapshot() {
   local status="${1:?missing status}"
   local pid_raw="${2:-0}"
@@ -177,7 +198,10 @@ service_start_locked() {
 
   new_pid="$(start_core_process "${core_bin}" "${rendered_path}" "${BOX_CORE_WORKDIR}")"
   sleep 1
-  if ! is_pid_alive "${new_pid}"; then
+  discovered_pid="$(discover_core_pid "${rendered_path}" "${BOX_CORE_WORKDIR}" || true)"
+  if [[ -n "${discovered_pid}" ]] && is_pid_alive "${discovered_pid}"; then
+    new_pid="${discovered_pid}"
+  elif ! is_pid_alive "${new_pid}"; then
     log "ERROR" "service" "E_CORE_START" "core process exited immediately"
     write_runtime_snapshot "failed" "0" "${rendered_path}"
     return "${E_CORE_START}"
@@ -206,6 +230,9 @@ service_stop_locked() {
   local pid_file pid rendered_path
   pid_file="$(service_pid_file)"
   pid="$(read_pid_file "${pid_file}" || true)"
+  if ! is_pid_alive "${pid}"; then
+    pid="$(discover_core_pid "${rendered_path}" "${BOX_CORE_WORKDIR}" || true)"
+  fi
   rendered_path="$(rendered_config_path)"
 
   firewall_disable || true
@@ -312,6 +339,9 @@ service_status() {
   pid_file="$(service_pid_file_readonly)"
   pid="$(read_pid_file "${pid_file}" || true)"
   rendered_path="$(rendered_config_expected_path)"
+  if ! is_pid_alive "${pid}"; then
+    pid="$(discover_core_pid "${rendered_path}" "${BOX_CORE_WORKDIR}" || true)"
+  fi
 
   if is_pid_alive "${pid}"; then
     status="healthy"
