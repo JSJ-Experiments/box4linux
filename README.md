@@ -260,6 +260,12 @@ On tags (`v*`):
     - `mode = "tun"` and `ipv6 = true`: IPv6 is proxied by the core TUN stack
     - `mode != "tun"` and `ipv6 = true`: IPv6 stays direct outside the Linux firewall graph
     - `ipv6 = false`: runtime disables IPv6 in the core/DNS path so clients prefer IPv4
+  - practical selection matrix:
+    - `mixed + ipv6=true + fake-ip`: current default, IPv4 proxied and IPv6 direct
+    - `mixed + ipv6=false + fake-ip`: prefer IPv4 while keeping transparent IPv4 proxying
+    - `tun + ipv6=true + fake-ip`: closest to phone-style full-device behavior, including proxied IPv6
+    - `mixed + redir-host`: real-address DNS answers instead of fake-IP
+  - browser/devtools may still show the real upstream server address even when local DNS is `fake-ip`; the fake-IP is only the local interception hop
 - Route convergence: renew/reapply prunes stale BOX fwmark rules and enforces one current `route_pref` rule
 - Idempotent + lock-protected: `enable|renew|disable`
 - `BOX_TRACE_COMMANDS=1` logs external command executions with component/action context
@@ -274,6 +280,16 @@ On tags (`v*`):
 - `nftables`:
   - `cap_ipv4=true`
   - `cap_ipv6=false` (full IPv6 interception/hijack graph pending)
+
+## Live Behavior Notes
+
+- `boxctl service status --json` reports:
+  - `dns_enhanced_mode`
+  - `ipv6_enabled`
+  - `ipv6_effective_mode`
+- `boxctl firewall status --json` reports the same IPv6/DNS fields plus backend capability flags.
+- If `dns_enhanced_mode = "fake-ip"`, local name resolution can return fake-IP ranges such as `198.18.0.0/16` while browser/devtools still show the real remote server address used by Mihomo's outbound connection.
+- There is no reference-backed `prefer_ipv4|prefer_ipv6|default` selector. The supported family control is `network.ipv6 = true|false`.
 
 ## Rollback/Uninstall
 
