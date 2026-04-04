@@ -43,7 +43,7 @@ rules:
 EOF
   fi
 
-  yaml_set_scalar "${rendered_file}" "mixed-port" "${BOX_REDIR_PORT}"
+  yaml_set_scalar_if_missing "${rendered_file}" "mixed-port" "7890"
   yaml_set_scalar "${rendered_file}" "redir-port" "${BOX_REDIR_PORT}"
   yaml_set_scalar "${rendered_file}" "tproxy-port" "${BOX_TPROXY_PORT}"
   yaml_set_scalar "${rendered_file}" "allow-lan" "true"
