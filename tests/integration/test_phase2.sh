@@ -134,6 +134,16 @@ assert_file_exists() {
   fi
 }
 
+assert_file_contains() {
+  local path="${1:?missing path}"
+  local needle="${2:?missing needle}"
+  if ! grep -Fq "${needle}" "${path}"; then
+    printf 'ASSERT FILE CONTAINS FAILED: expected [%s] in %s\n' "${needle}" "${path}" >&2
+    cat "${path}" >&2 || true
+    exit 1
+  fi
+}
+
 assert_no_duplicate_rules_iptables() {
   local dup_count
   dup_count="$(grep '^RULE|' "${MOCK_IPTABLES_STATE}" | sort | uniq -d | wc -l | tr -d '[:space:]')"
@@ -434,6 +444,9 @@ assert_contains "${service_json}" "\"status\":\"healthy\""
 assert_contains "${service_json}" "\"core\":\"mihomo\""
 assert_contains "${service_json}" "/rendered/mihomo/config.yaml"
 assert_file_exists "${BOX_RUN_DIR}/rendered/mihomo/config.yaml"
+assert_file_contains "${BOX_RUN_DIR}/rendered/mihomo/config.yaml" 'mixed-port: 7890'
+assert_file_contains "${BOX_RUN_DIR}/rendered/mihomo/config.yaml" 'redir-port: 19797'
+assert_file_contains "${BOX_RUN_DIR}/rendered/mihomo/config.yaml" 'tproxy-port: 19898'
 mihomo_checksum_after="$(sha256sum "${MIHOMO_SOURCE}" | awk '{print $1}')"
 if [[ "${mihomo_checksum_before}" != "${mihomo_checksum_after}" ]]; then
   printf 'ASSERT SOURCE MUTATION FAILED: mihomo source config changed\n' >&2
