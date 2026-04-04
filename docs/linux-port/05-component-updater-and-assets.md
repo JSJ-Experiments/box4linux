@@ -52,12 +52,16 @@ Implementation split in the Linux-native tree:
 
 Current Linux-native behavior:
 - `checksum_policy = off|optional|required`
+- URL fetch retry/backoff is controlled by `fetch_retries` and `fetch_retry_backoff_ms`
+- optional GitHub mirror rewrite is controlled by `use_ghproxy` and `ghproxy_url`
 - verification supports literal sha256 or `checksum_file`
 - file, archive, and directory payloads are staged before install
 - runtime handoff happens only after validation + install succeed
 - failed handoff restores the pre-update target from backup
 - `kernel` and `geo` support explicit release-resolution mode via GitHub release metadata
 - final install is staged in the target directory before the last rename
+- `subs` supports a Linux-native preset renderer for the sanitized Mihomo phone profile
+- `geo` supports built-in MetaCubeX presets for mihomo, sing-box, and legacy dat consumers
 
 ## Subscription Pipeline
 For mihomo:
@@ -94,6 +98,10 @@ Single file for now: `/etc/box/box.toml`
 artifact_dir = "/var/lib/box/artifacts"
 staging_dir = "/var/lib/box/staging"
 checksum_policy = "optional"
+fetch_retries = 3
+fetch_retry_backoff_ms = 750
+use_ghproxy = false
+ghproxy_url = "https://ghfast.top"
 kernel_interval = "daily"
 subs_interval = "hourly"
 geo_interval = "daily"
@@ -111,6 +119,17 @@ Accepted source fields per component:
 - `url` or `file`
 - optional `checksum` or `checksum_file`
 - optional `target`
+
+Preset fields:
+- `updater.subs.preset = "mihomo_phone"`
+- `updater.subs.provider_names = [...]`
+- `updater.subs.provider_urls = [...]`
+- `updater.geo.preset = auto|metacubex_mihomo|metacubex_sing_box|metacubex_legacy`
+
+Preset notes:
+- `mihomo_phone` renders `/etc/box/profiles/phone-mihomo-config.yml` into the subscription target and replaces placeholder provider URLs using `provider_names` and `provider_urls`
+- if `provider_names` is omitted, the default order is `proxy1 proxy3 proxy4 proxy5 proxy6`
+- `geo` presets emit fixed Linux-native MetaCubeX asset URLs without mutating source config in place
 
 Release-resolution fields for `kernel` and `geo`:
 - `source = "release"`
@@ -216,12 +235,11 @@ Before activation:
 - only then trigger reload/restart
 
 Current handoff behavior:
-- `sing-box` subscriptions: controlled restart
-- `mihomo` subscriptions: controlled restart
+- `sing-box` subscriptions: controller API reload when `experimental.clash_api.external_controller` is configured; restart fallback otherwise
+- `mihomo` subscriptions: controller API reload when `external-controller` is configured; restart fallback otherwise
 - `kernel`: controlled restart only when the updated target is the active running core binary
 - `geo`: no forced restart
 - `dashboard`: no runtime handoff
 
 TODO:
-- replace restart fallback with real API-driven reloads once core-specific reload endpoints are implemented
 - add richer release asset heuristics for common geo providers so fewer installs need explicit regex overrides

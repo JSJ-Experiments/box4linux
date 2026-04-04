@@ -12,18 +12,23 @@ Define portable Linux config/state contracts replacing Android-centric `settings
 - App UID/GID and interface allow/ignore lists
 - cgroup toggles
 
-## Linux Config Split
-Create explicit files:
+## Linux Config Layout
+Current Linux-native implementation uses one canonical file:
 1. `/etc/box/box.toml`
-- global options (paths, mode, selected core)
-2. `/etc/box/network.toml`
-- mode, ports, dns hijack policy, ipv6, cn bypass
-3. `/etc/box/policy.toml`
-- include/exclude users/groups/interfaces/mac rules
-4. `/etc/box/subscriptions.toml`
-- provider URLs and output files
-5. `/etc/box/update.toml`
-- channel/stability, mirrors, schedule
+- `[core]`
+- `[network]`
+- `[firewall]`
+- `[policy]`
+- `[updater]`
+- `[updater.kernel]`
+- `[updater.subs]`
+- `[updater.geo]`
+- `[updater.dashboard]`
+
+Rationale:
+- one loader/validator path
+- easier packaged upgrades
+- simpler systemd unit integration
 
 ## Runtime State Files
 Under `/var/run/box/`:
@@ -67,30 +72,37 @@ Implementation requirement:
 ```toml
 [core]
 selected = "mihomo"
-auto_modify_config = true
+bin_dir = "/usr/local/bin"
+workdir = "/var/lib/box"
+config_source = "/etc/box/profiles/config.yaml"
 
 [network]
 mode = "tun"
 tproxy_port = 9898
 redir_port = 9797
-ipv6 = true
 dns_hijack_mode = "tproxy"
-proxy_tcp = true
-proxy_udp = true
+dns_coexist_mode = "preserve_tailnet"
 
 [policy]
+enabled = false
 proxy_mode = "core"
-include_uids = []
-exclude_uids = []
-include_gids = []
-exclude_gids = []
 allow_ifaces = ["wlan+", "eth+"]
 ignore_ifaces = []
 
-[updates]
-enabled_subscription = false
-enabled_geo = false
+[updater]
+checksum_policy = "optional"
+fetch_retries = 3
+fetch_retry_backoff_ms = 750
 use_ghproxy = false
+ghproxy_url = "https://ghfast.top"
+
+[updater.subs]
+preset = "mihomo_phone"
+provider_names = ["proxy1", "proxy3"]
+provider_urls = ["https://example.invalid/sub-a", "https://example.invalid/sub-b"]
+
+[updater.geo]
+preset = "auto"
 ```
 
 ## Runtime Snapshot Contract
@@ -107,5 +119,11 @@ This snapshot is used by:
 - `network_mode` -> `[network].mode`
 - `proxy_mode` -> `[policy].proxy_mode`
 - `ap_list`/`ignore_ap_list` -> `[policy].allow_ifaces`/`ignore_ifaces`
-- `subscription_url_*` + provider names -> `[subscriptions]`
+- `subscription_url_*` + provider names -> `[updater.subs.provider_urls]` + `[updater.subs.provider_names]`
 - `cgroup_*` -> `[resource_limits]`
+
+## Updater-Specific Runtime Notes
+- `updater.subs.preset = "mihomo_phone"` renders a sanitized template from `/etc/box/profiles/phone-mihomo-config.yml`
+- `updater.geo.preset = "auto"` derives the correct MetaCubeX bundle for the selected core
+- GitHub-backed updater downloads can be mirrored via `use_ghproxy = true`
+- subscription updates prefer controller API reload when the rendered config exposes a controller endpoint

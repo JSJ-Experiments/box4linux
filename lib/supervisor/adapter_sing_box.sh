@@ -36,11 +36,45 @@ adapter_sing_box_start() {
 }
 
 adapter_sing_box_reload() {
-  local msg="sing-box reload is not implemented yet; restart is required"
-  if declare -F log >/dev/null 2>&1; then
-    log "WARN" "service" "SING_BOX_RELOAD_UNIMPLEMENTED" "${msg}"
-  else
-    printf 'WARN: %s\n' "${msg}" >&2
+  local rendered_config="${1:?missing rendered config path}"
+  local workdir="${2:?missing workdir}"
+  local bin="${3:?missing sing-box binary path}"
+  local curl_bin controller secret url jq_bin
+  local -a curl_args
+
+  jq_bin="$(command -v jq || true)"
+  if [[ -z "${jq_bin}" ]]; then
+    log "WARN" "service" "SING_BOX_RELOAD_UNAVAILABLE" "jq is required for sing-box reload"
+    return 1
   fi
+
+  controller="$("${jq_bin}" -r '.experimental.clash_api.external_controller // (.. | objects | .external_controller? // empty)' "${rendered_config}" 2>/dev/null | head -n 1)"
+  secret="$("${jq_bin}" -r '.experimental.clash_api.secret // (.. | objects | .secret? // empty)' "${rendered_config}" 2>/dev/null | head -n 1)"
+  if [[ -z "${controller}" || "${controller}" == "null" ]]; then
+    log "WARN" "service" "SING_BOX_RELOAD_UNAVAILABLE" "sing-box controller is not configured; restart is required"
+    return 1
+  fi
+
+  adapter_sing_box_check_config "${bin}" "${rendered_config}" "${workdir}" >/dev/null 2>&1 || true
+
+  curl_bin="$(command -v curl || true)"
+  if [[ -z "${curl_bin}" ]]; then
+    log "WARN" "service" "SING_BOX_RELOAD_UNAVAILABLE" "curl is required for sing-box reload"
+    return 1
+  fi
+
+  url="http://${controller}/configs?force=true"
+  curl_args=("${curl_bin}" -fsS -X PUT "${url}" -H 'Content-Type: application/json')
+  if [[ -n "${secret}" && "${secret}" != "null" ]]; then
+    curl_args+=(-H "Authorization: Bearer ${secret}")
+  fi
+  curl_args+=(-d '{"path":"","payload":""}')
+
+  if "${curl_args[@]}" >/dev/null; then
+    log "INFO" "service" "SING_BOX_RELOADED" "sing-box API reload succeeded controller=${controller}"
+    return 0
+  fi
+
+  log "WARN" "service" "SING_BOX_RELOAD_FAILED" "sing-box API reload failed controller=${controller}"
   return 1
 }

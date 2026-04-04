@@ -32,6 +32,8 @@ package() {
   ln -sf ../lib/box4linux/cmd/boxctl "${pkgdir}/usr/bin/boxctl"
 
   install -Dm644 "${repo_root}/etc/box/box.toml" "${pkgdir}/etc/box/box.toml"
+  install -Dm644 "${repo_root}/etc/box/profiles/phone-mihomo-config.yml" \
+    "${pkgdir}/etc/box/profiles/phone-mihomo-config.yml"
 
   local unit
   for unit in "${repo_root}"/systemd/*; do

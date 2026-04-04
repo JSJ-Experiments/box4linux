@@ -16,6 +16,16 @@ yaml_set_scalar() {
   fi
 }
 
+yaml_set_scalar_if_missing() {
+  local file="${1:?missing file}"
+  local key="${2:?missing key}"
+  local value="${3:?missing value}"
+
+  if ! grep -Eq "^[[:space:]]*${key}:" "${file}"; then
+    printf '%s: %s\n' "${key}" "${value}" >>"${file}"
+  fi
+}
+
 mutator_mihomo_render_overlay() {
   local source_file="${1:?missing source file}"
   local rendered_file="${2:?missing rendered file}"
@@ -37,6 +47,9 @@ EOF
   yaml_set_scalar "${rendered_file}" "redir-port" "${BOX_REDIR_PORT}"
   yaml_set_scalar "${rendered_file}" "tproxy-port" "${BOX_TPROXY_PORT}"
   yaml_set_scalar "${rendered_file}" "allow-lan" "true"
+  yaml_set_scalar_if_missing "${rendered_file}" "external-controller" "\"127.0.0.1:9090\""
+  yaml_set_scalar_if_missing "${rendered_file}" "external-ui" "\"./dashboard\""
+  yaml_set_scalar_if_missing "${rendered_file}" "external-ui-url" "\"https://github.com/Zephyruso/zashboard/releases/latest/download/dist.zip\""
 
   {
     printf '# box overlay (runtime only)\n'

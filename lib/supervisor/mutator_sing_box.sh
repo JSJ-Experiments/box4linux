@@ -26,9 +26,17 @@ mutator_sing_box_render_overlay() {
       --argjson tproxy_port "${BOX_TPROXY_PORT}" \
       --argjson redir_port "${BOX_REDIR_PORT}" \
       --argjson dns_port "${BOX_DNS_PORT}" \
+      --arg controller "127.0.0.1:9090" \
+      --arg external_ui "./dashboard" \
+      --arg external_ui_download_url "https://github.com/Zephyruso/zashboard/releases/latest/download/dist.zip" \
       '
       . + {
         "experimental": ((.experimental // {}) + {
+          "clash_api": ((.experimental.clash_api // {}) + {
+            "external_controller": (.experimental.clash_api.external_controller // $controller),
+            "external_ui": (.experimental.clash_api.external_ui // $external_ui),
+            "external_ui_download_url": (.experimental.clash_api.external_ui_download_url // $external_ui_download_url)
+          }),
           "box_overlay": {
             "network_mode": $mode,
             "dns_hijack_mode": $dns_mode,

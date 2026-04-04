@@ -4,11 +4,26 @@ set -euo pipefail
 
 output=""
 url=""
+method="GET"
+data=""
+headers=()
 
 while (($# > 0)); do
   case "$1" in
     -o)
       output="${2:?missing curl output path}"
+      shift 2
+      ;;
+    -X)
+      method="${2:?missing curl method}"
+      shift 2
+      ;;
+    -H)
+      headers+=("${2:?missing curl header}")
+      shift 2
+      ;;
+    -d|--data|--data-binary)
+      data="${2:?missing curl data}"
       shift 2
       ;;
     -f|-s|-S|-L|-fsSL)
@@ -21,9 +36,48 @@ while (($# > 0)); do
   esac
 done
 
+if [[ "${method}" != "GET" ]]; then
+  if [[ -n "${MOCK_CURL_PUT_LOG:-}" ]]; then
+    {
+      printf 'method=%s url=%s data=%s\n' "${method}" "${url}" "${data}"
+      for header in "${headers[@]}"; do
+        printf 'header=%s\n' "${header}"
+      done
+    } >>"${MOCK_CURL_PUT_LOG}"
+  fi
+  if [[ "${MOCK_CURL_PUT_FAIL:-0}" == "1" ]]; then
+    printf 'mock curl %s failed for %s\n' "${method}" "${url}" >&2
+    exit 22
+  fi
+  exit 0
+fi
+
 if [[ -n "${MOCK_CURL_FAIL_URL:-}" && "${url}" == "${MOCK_CURL_FAIL_URL}" ]]; then
   printf 'mock curl failed for %s\n' "${url}" >&2
   exit 22
+fi
+
+if [[ -n "${MOCK_CURL_FLAKY_URL:-}" && "${url}" == "${MOCK_CURL_FLAKY_URL}" ]]; then
+  state_file="${MOCK_CURL_FLAKY_STATE_FILE:?MOCK_CURL_FLAKY_STATE_FILE is required for flaky curl}"
+  fail_count="${MOCK_CURL_FLAKY_ATTEMPTS:-1}"
+  current_count=0
+  if [[ -f "${state_file}" ]]; then
+    current_count="$(cat "${state_file}")"
+  fi
+  current_count=$(( current_count + 1 ))
+  printf '%s\n' "${current_count}" >"${state_file}"
+  if (( current_count <= fail_count )); then
+    printf 'mock curl flaky failure %s/%s for %s\n' "${current_count}" "${fail_count}" "${url}" >&2
+    exit 22
+  fi
+fi
+
+if [[ -n "${MOCK_CURL_MAP_FILE:-}" && -f "${MOCK_CURL_MAP_FILE}" && -n "${output}" ]]; then
+  mapped_file="$(awk -F'\t' -v wanted="${url}" '$1==wanted { print $2; exit }' "${MOCK_CURL_MAP_FILE}")"
+  if [[ -n "${mapped_file}" ]]; then
+    cp -f "${mapped_file}" "${output}"
+    exit 0
+  fi
 fi
 
 if [[ -n "${MOCK_CURL_RESPONSE_FILE:-}" && -n "${output}" ]]; then

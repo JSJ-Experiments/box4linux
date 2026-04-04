@@ -35,12 +35,54 @@ adapter_mihomo_start() {
   printf '%s\n' "$!"
 }
 
+adapter_mihomo_read_value() {
+  local config_file="${1:?missing config file}"
+  local key_regex="${2:?missing key regex}"
+  awk -F: -v wanted="${key_regex}" '
+    $0 ~ "^[[:space:]]*" wanted "[[:space:]]*:" {
+      value = substr($0, index($0, ":") + 1)
+      gsub(/^[[:space:]]+|[[:space:]]+$/, "", value)
+      gsub(/^"|"$/, "", value)
+      print value
+      exit
+    }
+  ' "${config_file}"
+}
+
 adapter_mihomo_reload() {
-  local msg="mihomo reload is not implemented yet; restart is required"
-  if declare -F log >/dev/null 2>&1; then
-    log "WARN" "service" "MIHOMO_RELOAD_UNIMPLEMENTED" "${msg}"
-  else
-    printf 'WARN: %s\n' "${msg}" >&2
+  local rendered_config="${1:?missing rendered config path}"
+  local workdir="${2:?missing workdir}"
+  local bin="${3:?missing mihomo binary path}"
+  local curl_bin controller secret url
+  local -a curl_args
+
+  controller="$(adapter_mihomo_read_value "${rendered_config}" 'external-controller|external_controller' || true)"
+  secret="$(adapter_mihomo_read_value "${rendered_config}" 'secret' || true)"
+  if [[ -z "${controller}" ]]; then
+    log "WARN" "service" "MIHOMO_RELOAD_UNAVAILABLE" "mihomo controller is not configured; restart is required"
+    return 1
   fi
+
+  adapter_mihomo_check_config "${bin}" "${rendered_config}" "${workdir}" >/dev/null 2>&1 || true
+
+  curl_bin="$(command -v curl || true)"
+  if [[ -z "${curl_bin}" ]]; then
+    log "WARN" "service" "MIHOMO_RELOAD_UNAVAILABLE" "curl is required for mihomo reload"
+    return 1
+  fi
+
+  url="http://${controller}/configs?force=true"
+  curl_args=("${curl_bin}" -fsS -X PUT "${url}" -H 'Content-Type: application/json')
+  if [[ -n "${secret}" ]]; then
+    curl_args+=(-H "Authorization: Bearer ${secret}")
+  fi
+  curl_args+=(-d '{"path":"","payload":""}')
+
+  if "${curl_args[@]}" >/dev/null; then
+    log "INFO" "service" "MIHOMO_RELOADED" "mihomo API reload succeeded controller=${controller}"
+    return 0
+  fi
+
+  log "WARN" "service" "MIHOMO_RELOAD_FAILED" "mihomo API reload failed controller=${controller}"
   return 1
 }
