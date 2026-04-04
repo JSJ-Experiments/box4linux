@@ -80,6 +80,10 @@ If unsupported, apply controlled downgrade with explicit logs.
   - non-`tun` modes + `network.ipv6=true`: IPv6 remains direct outside the firewall graph.
   - `network.ipv6=false`: runtime disables IPv6 in the core/DNS path to prefer IPv4.
 - `network.dns_enhanced_mode` controls Mihomo DNS `fake-ip` vs `redir-host` independently from firewall mode.
+- This means `mixed` mode on current Linux-native backends is effectively:
+  - IPv4: transparent redirect/mark path through Box/Mihomo
+  - IPv6: direct host path unless `mode=tun`
+- When `dns_enhanced_mode = "fake-ip"`, applications may resolve fake IPv4/IPv6 placeholders locally while observability tools still show the real remote upstream address chosen by Mihomo.
 
 ## Tailscale Coexistence Requirements
 For hosts that run Tailscale alongside Box, firewall apply/cleanup must preserve Tailscale routing and DNS behavior.

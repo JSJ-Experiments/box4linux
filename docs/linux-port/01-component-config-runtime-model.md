@@ -141,3 +141,8 @@ This snapshot is used by:
   - `mode!=tun` + `ipv6=true`: IPv6 remains direct because the firewall graph is still IPv4-only.
   - `ipv6=false`: runtime disables IPv6 in the core/DNS layer so clients fall back to IPv4.
 - `network.dns_enhanced_mode = "fake-ip" | "redir-host"` is exposed explicitly for Mihomo overlay rendering.
+- Operational presets:
+  - `mixed + ipv6=true + fake-ip`: default desktop compromise, IPv4 proxied and IPv6 direct
+  - `mixed + ipv6=false + fake-ip`: force IPv4 preference without changing firewall mode
+  - `tun + ipv6=true + fake-ip`: closest to phone-style full-device behavior
+  - `mixed + redir-host`: avoid fake-IP answers and keep real-address DNS responses
