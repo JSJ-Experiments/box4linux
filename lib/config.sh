@@ -125,9 +125,9 @@ config_defaults() {
   BOX_TAILSCALE_DNS_RESOLVER="100.100.100.100"
   BOX_TAILSCALE_FWMARK="0x80000/0xff0000"
   BOX_TAILSCALE_ROUTE_TABLE="52"
-  BOX_CAMPUS_DNS_SUFFIXES=("+.bit.edu.cn")
-  BOX_CAMPUS_DNS_PROBE_HOSTS=("lexue.bit.edu.cn" "xk.bit.edu.cn")
-  BOX_CAMPUS_DNS_PUBLIC_SERVERS=("https://dns.alidns.com/dns-query" "https://cloudflare-dns.com/dns-query" "https://dns.google/dns-query")
+  BOX_CAMPUS_DNS_SUFFIXES=()
+  BOX_CAMPUS_DNS_PROBE_HOSTS=()
+  BOX_CAMPUS_DNS_PUBLIC_SERVERS=()
   BOX_FIREWALL_BACKEND="iptables"
   BOX_ROUTE_TABLE="2024"
   BOX_ROUTE_PREF="100"
@@ -234,10 +234,31 @@ toml_value() {
   local section="${2:?missing section}"
   local key="${3:?missing key}"
   awk -v target_section="${section}" -v target_key="${key}" '
-    BEGIN { section = "" }
+    function append_value(fragment) {
+      if (value == "") {
+        value = fragment
+      } else {
+        value = value "\n" fragment
+      }
+    }
+
+    BEGIN {
+      section = ""
+      capture = 0
+      value = ""
+    }
     /^[[:space:]]*#/ { next }
-    /^[[:space:]]*$/ { next }
+    /^[[:space:]]*$/ {
+      if (capture) {
+        append_value($0)
+      }
+      next
+    }
     /^[[:space:]]*\[/ {
+      if (capture) {
+        print value
+        exit
+      }
       line = $0
       gsub(/^[[:space:]]*\[/, "", line)
       gsub(/\][[:space:]]*$/, "", line)
@@ -245,12 +266,32 @@ toml_value() {
       section = line
       next
     }
+    capture {
+      append_value($0)
+      if ($0 ~ /\]/) {
+        print value
+        exit
+      }
+      next
+    }
     section == target_section {
       line = $0
       if (line ~ "^[[:space:]]*" target_key "[[:space:]]*=") {
         sub(/^[^=]*=/, "", line)
-        print line
+        append_value(line)
+        trimmed = line
+        gsub(/^[[:space:]]+|[[:space:]]+$/, "", trimmed)
+        if (trimmed ~ /^\[/ && trimmed !~ /\]/) {
+          capture = 1
+          next
+        }
+        print value
         exit
+      }
+    }
+    END {
+      if (capture && value != "") {
+        print value
       }
     }
   ' "${file}"

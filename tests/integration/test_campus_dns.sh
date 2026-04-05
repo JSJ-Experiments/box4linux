@@ -7,6 +7,7 @@ TMP_DIR="$(mktemp -d)"
 MOCK_DIR="${TMP_DIR}/mockbin"
 PROFILE_FILE="${TMP_DIR}/profiles/mihomo.yml"
 RENDERED_FILE="${TMP_DIR}/rendered.yml"
+CONFIG_FILE="${TMP_DIR}/box.toml"
 
 cleanup() {
   rm -rf "${TMP_DIR}"
@@ -18,6 +19,18 @@ cp "${ROOT_DIR}/tests/fixtures/mockbin/ip" "${MOCK_DIR}/ip"
 cp "${ROOT_DIR}/tests/fixtures/mockbin/resolvectl" "${MOCK_DIR}/resolvectl"
 cp "${ROOT_DIR}/tests/fixtures/mockbin/dig" "${MOCK_DIR}/dig"
 chmod +x "${MOCK_DIR}/ip" "${MOCK_DIR}/resolvectl" "${MOCK_DIR}/dig"
+
+cat >"${CONFIG_FILE}" <<'EOF'
+[network]
+campus_dns_mode = "auto"
+campus_dns_suffixes = ["+.bit.edu.cn"]
+campus_dns_probe_hosts = ["lexue.bit.edu.cn", "xk.bit.edu.cn"]
+campus_dns_public_servers = [
+  "https://dns.alidns.com/dns-query",
+  "https://cloudflare-dns.com/dns-query",
+  "https://dns.google/dns-query",
+]
+EOF
 
 cat >"${PROFILE_FILE}" <<'EOF'
 dns:
@@ -71,9 +84,24 @@ export BOX_REDIR_PORT="9797"
 export BOX_TPROXY_PORT="9898"
 
 # shellcheck disable=SC1091
+source "${ROOT_DIR}/lib/common.sh"
+# shellcheck disable=SC1091
+source "${ROOT_DIR}/lib/config.sh"
+# shellcheck disable=SC1091
 source "${ROOT_DIR}/lib/supervisor/mutator_mihomo.sh"
 
-printf '[1/2] campus auto mode uses live campus resolvers for bit suffix\n'
+printf '[1/3] multiline campus dns arrays parse from box.toml\n'
+export BOX_CONFIG_FILE="${CONFIG_FILE}"
+load_config >/dev/null
+[[ "${BOX_CAMPUS_DNS_MODE}" == "auto" ]]
+[[ "${BOX_CAMPUS_DNS_SUFFIXES[0]}" == "+.bit.edu.cn" ]]
+[[ "${BOX_CAMPUS_DNS_PROBE_HOSTS[0]}" == "lexue.bit.edu.cn" ]]
+[[ "${BOX_CAMPUS_DNS_PROBE_HOSTS[1]}" == "xk.bit.edu.cn" ]]
+[[ "${BOX_CAMPUS_DNS_PUBLIC_SERVERS[0]}" == "https://dns.alidns.com/dns-query" ]]
+[[ "${BOX_CAMPUS_DNS_PUBLIC_SERVERS[1]}" == "https://cloudflare-dns.com/dns-query" ]]
+[[ "${BOX_CAMPUS_DNS_PUBLIC_SERVERS[2]}" == "https://dns.google/dns-query" ]]
+
+printf '[2/3] campus auto mode uses live campus resolvers for bit suffix\n'
 cp "${PROFILE_FILE}" "${RENDERED_FILE}"
 export MOCK_DIG_PRIVATE_HOSTS="lexue.bit.edu.cn xk.bit.edu.cn"
 mutator_mihomo_render_overlay "${PROFILE_FILE}" "${RENDERED_FILE}"
@@ -83,7 +111,7 @@ assert_contains "${RENDERED_FILE}" '      - 10.0.32.33'
 assert_contains "${RENDERED_FILE}" '    "+.edu.cn":'
 assert_contains "${RENDERED_FILE}" '      - dhcp://system'
 
-printf '[2/2] public auto mode falls back to configured DoH servers for bit suffix\n'
+printf '[3/3] public auto mode falls back to configured DoH servers for bit suffix\n'
 cp "${PROFILE_FILE}" "${RENDERED_FILE}"
 export MOCK_DIG_PRIVATE_HOSTS=""
 mutator_mihomo_render_overlay "${PROFILE_FILE}" "${RENDERED_FILE}"

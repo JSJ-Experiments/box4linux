@@ -13,6 +13,15 @@ dns_hijack_mode = "redirect"
 dns_enhanced_mode = "fake-ip"
 dns_coexist_mode = "preserve_tailnet"
 ipv6 = true
+# Optional adaptive campus DNS example:
+# campus_dns_mode = "auto"
+# campus_dns_suffixes = ["+.example.edu"]
+# campus_dns_probe_hosts = ["portal.example.edu", "intranet.example.edu"]
+# campus_dns_public_servers = [
+#   "https://dns.alidns.com/dns-query",
+#   "https://cloudflare-dns.com/dns-query",
+#   "https://dns.google/dns-query",
+# ]
 tailscale_iface = "tailscale0"
 tailnet_ipv4_cidr = "100.64.0.0/10"
 tailnet_ipv6_cidr = "fd7a:115c:a1e0::/48"
