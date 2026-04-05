@@ -257,10 +257,11 @@ On tags (`v*`):
 - IPv6 and DNS controls:
   - `network.ipv6 = true|false` controls whether Mihomo and its DNS answer IPv6 at all
   - `network.dns_enhanced_mode = "fake-ip" | "redir-host"` controls Mihomo DNS behavior
-  - `network.campus_dns_mode = "auto" | "campus" | "public"` controls how campus suffixes resolve
-  - `network.campus_dns_suffixes` lists the suffixes that should follow campus/public split DNS logic
-  - `network.campus_dns_probe_hosts` lists the hosts used to decide whether the current network is returning internal campus addresses
-  - `network.campus_dns_public_servers` lists the DoH resolvers used for those suffixes when the current network is not returning internal campus addresses
+  - `network.org_dns_mode = "auto" | "org" | "public"` controls how org-specific suffixes resolve
+  - `network.org_dns_suffixes` lists the suffixes that should follow org/public split DNS logic
+  - `network.org_dns_probe_hosts` lists the hosts used to decide whether the current network is returning internal org addresses
+  - `network.org_dns_public_servers` lists the DoH resolvers used for those suffixes when the current network is not returning internal org addresses
+  - legacy `campus_dns_*` keys are still accepted as aliases
   - effective IPv6 behavior today is:
     - `mode = "tun"` and `ipv6 = true`: IPv6 is proxied by the core TUN stack
     - `mode != "tun"` and `ipv6 = true`: IPv6 stays direct outside the Linux firewall graph
@@ -292,17 +293,23 @@ On tags (`v*`):
   - `dns_enhanced_mode`
   - `ipv6_enabled`
   - `ipv6_effective_mode`
+  - `org_dns_mode_configured`
+  - `org_dns_mode_active`
+  - `org_dns_iface`
+  - `org_dns_servers`
+  - `org_dns_suffixes`
+  - `org_dns_probe_hosts`
 - `boxctl firewall status --json` reports the same IPv6/DNS fields plus backend capability flags.
 - If `dns_enhanced_mode = "fake-ip"`, local name resolution can return fake-IP ranges such as `198.18.0.0/16` while browser/devtools still show the real remote server address used by Mihomo's outbound connection.
 - There is no reference-backed `prefer_ipv4|prefer_ipv6|default` selector. The supported family control is `network.ipv6 = true|false`.
-- This repo's shipped `etc/box/box.toml` is already preconfigured for a BIT campus/public split DNS policy:
-  - `+.bit.edu.cn` auto-switches between current campus DNS and the configured DoH resolvers
+- This repo's shipped `etc/box/box.toml` is already preconfigured for a BIT org/public split DNS policy:
+  - `+.bit.edu.cn` auto-switches between current org-local DNS and the configured DoH resolvers
   - `+.edu.cn` stays on `dhcp://system` / `system`
-  - the running service also watches link/route/address changes and safely reloads the rendered Mihomo DNS policy when the detected campus/public environment signature changes
-- Campus suffix handling is adaptive rather than pinned:
-  - in `campus_dns_mode = "auto"`, Box inspects the active default-route interface, reads its live DNS servers, and probes the configured campus hosts
+  - the running service also watches link/route/address changes and safely reloads the rendered Mihomo DNS policy when the detected org/public environment signature changes
+- Org suffix handling is adaptive rather than pinned:
+  - in `org_dns_mode = "auto"`, Box inspects the active default-route interface, reads its live DNS servers, and probes the configured org hosts
   - if those probes resolve to RFC1918 addresses, configured suffixes such as `+.bit.edu.cn` render to the current link DNS servers
-  - otherwise those suffixes render to the configured DoH resolvers so the same suffixes still work off campus without hardcoding a campus resolver IP
+  - otherwise those suffixes render to the configured DoH resolvers so the same suffixes still work off campus without hardcoding an org resolver IP
 
 ## Rollback/Uninstall
 

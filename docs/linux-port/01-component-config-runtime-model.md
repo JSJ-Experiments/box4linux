@@ -57,7 +57,7 @@ Under `/var/log/box/`:
 - `network_mode` in `{tun,tproxy,redirect,mixed,enhance}`
 - `dns_enhanced_mode` in `{fake-ip,redir-host}`
 - `ipv6` in `{true,false,1,0}`
-- `campus_dns_mode` in `{auto,campus,public}`
+- `org_dns_mode` in `{auto,org,public}`
 - `proxy_mode` in `{core,blacklist,whitelist}`
 - Port ranges 1..65535 and no collision with reserved core APIs.
 - If `bypass_cn_ip=true`, require a readable IPv4 CIDR file (`bypass_cn_file`) at runtime.
@@ -88,10 +88,10 @@ dns_hijack_mode = "tproxy"
 dns_enhanced_mode = "fake-ip"
 dns_coexist_mode = "preserve_tailnet"
 ipv6 = true
-campus_dns_mode = "auto"
-campus_dns_suffixes = ["+.bit.edu.cn"]
-campus_dns_probe_hosts = ["lexue.bit.edu.cn", "xk.bit.edu.cn"]
-campus_dns_public_servers = [
+org_dns_mode = "auto"
+org_dns_suffixes = ["+.bit.edu.cn"]
+org_dns_probe_hosts = ["lexue.bit.edu.cn", "xk.bit.edu.cn"]
+org_dns_public_servers = [
   "https://dns.alidns.com/dns-query",
   "https://cloudflare-dns.com/dns-query",
   "https://dns.google/dns-query",
@@ -150,12 +150,13 @@ This snapshot is used by:
   - `mode!=tun` + `ipv6=true`: IPv6 remains direct because the firewall graph is still IPv4-only.
   - `ipv6=false`: runtime disables IPv6 in the core/DNS layer so clients fall back to IPv4.
 - `network.dns_enhanced_mode = "fake-ip" | "redir-host"` is exposed explicitly for Mihomo overlay rendering.
-- `network.campus_dns_mode = "auto" | "campus" | "public"` controls campus suffix DNS rendering for Mihomo.
-- `network.campus_dns_suffixes` should contain only the suffixes that must follow campus/public split logic.
-- In `campus_dns_mode = "auto"`, Mihomo overlay rendering inspects the active default-route interface, reads its live DNS servers via `resolvectl`, and probes `network.campus_dns_probe_hosts`.
+- `network.org_dns_mode = "auto" | "org" | "public"` controls org suffix DNS rendering for Mihomo.
+- `network.org_dns_suffixes` should contain only the suffixes that must follow org/public split logic.
+- Legacy `campus_dns_*` keys are still accepted as aliases.
+- In `org_dns_mode = "auto"`, Mihomo overlay rendering inspects the active default-route interface, reads its live DNS servers via `resolvectl`, and probes `network.org_dns_probe_hosts`.
 - If any probe host resolves to RFC1918 space, those suffixes render to the current link DNS servers.
-- Otherwise the suffixes render to `network.campus_dns_public_servers`, which should be DoH endpoints rather than a hardcoded campus resolver IP.
-- While the service is running, a lightweight service-owned monitor watches link/route/address changes and triggers a safe reload plus firewall renew when that campus/public signature changes.
+- Otherwise the suffixes render to `network.org_dns_public_servers`, which should be DoH endpoints rather than a hardcoded org resolver IP.
+- While the service is running, a lightweight service-owned monitor watches link/route/address changes and triggers a safe reload plus firewall renew when that org/public signature changes.
 - Operational presets:
   - `mixed + ipv6=true + fake-ip`: default desktop compromise, IPv4 proxied and IPv6 direct
   - `mixed + ipv6=false + fake-ip`: force IPv4 preference without changing firewall mode

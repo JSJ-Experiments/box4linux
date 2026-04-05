@@ -148,6 +148,36 @@ json_bool_pair() {
   fi
 }
 
+join_by() {
+  local delimiter="${1-}"
+  shift || true
+  local first=1 item
+  for item in "$@"; do
+    if [[ "${first}" -eq 1 ]]; then
+      printf '%s' "${item}"
+      first=0
+    else
+      printf '%s%s' "${delimiter}" "${item}"
+    fi
+  done
+}
+
+json_array_pair() {
+  local key="${1:?missing key}"
+  shift || true
+  local first=1 item
+  printf '"%s":[' "$(json_escape "${key}")"
+  for item in "$@"; do
+    if [[ "${first}" -eq 1 ]]; then
+      first=0
+    else
+      printf ','
+    fi
+    printf '"%s"' "$(json_escape "${item}")"
+  done
+  printf ']'
+}
+
 trace_cmd() {
   local component="${1:-trace}"
   shift || true

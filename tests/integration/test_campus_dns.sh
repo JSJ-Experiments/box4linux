@@ -22,10 +22,10 @@ chmod +x "${MOCK_DIR}/ip" "${MOCK_DIR}/resolvectl" "${MOCK_DIR}/dig"
 
 cat >"${CONFIG_FILE}" <<'EOF'
 [network]
-campus_dns_mode = "auto"
-campus_dns_suffixes = ["+.bit.edu.cn"]
-campus_dns_probe_hosts = ["lexue.bit.edu.cn", "xk.bit.edu.cn"]
-campus_dns_public_servers = [
+org_dns_mode = "auto"
+org_dns_suffixes = ["+.bit.edu.cn"]
+org_dns_probe_hosts = ["lexue.bit.edu.cn", "xk.bit.edu.cn"]
+org_dns_public_servers = [
   "https://dns.alidns.com/dns-query",
   "https://cloudflare-dns.com/dns-query",
   "https://dns.google/dns-query",
@@ -119,7 +119,7 @@ source "${ROOT_DIR}/lib/firewall/firewall.sh"
 # shellcheck disable=SC1091
 source "${ROOT_DIR}/lib/supervisor/supervisor.sh"
 
-printf '[1/3] multiline campus dns arrays parse from box.toml\n'
+printf '[1/5] multiline org dns arrays parse from box.toml\n'
 export BOX_CONFIG_FILE="${CONFIG_FILE}"
 load_config >/dev/null
 [[ "${BOX_CAMPUS_DNS_MODE}" == "auto" ]]
@@ -130,7 +130,7 @@ load_config >/dev/null
 [[ "${BOX_CAMPUS_DNS_PUBLIC_SERVERS[1]}" == "https://cloudflare-dns.com/dns-query" ]]
 [[ "${BOX_CAMPUS_DNS_PUBLIC_SERVERS[2]}" == "https://dns.google/dns-query" ]]
 
-printf '[2/3] campus auto mode uses live campus resolvers for bit suffix\n'
+printf '[2/5] org auto mode uses live org resolvers for bit suffix\n'
 cp "${PROFILE_FILE}" "${RENDERED_FILE}"
 export MOCK_DIG_PRIVATE_HOSTS="lexue.bit.edu.cn xk.bit.edu.cn"
 mutator_mihomo_render_overlay "${PROFILE_FILE}" "${RENDERED_FILE}"
@@ -140,7 +140,7 @@ assert_contains "${RENDERED_FILE}" '      - 10.0.32.33'
 assert_contains "${RENDERED_FILE}" '    "+.edu.cn":'
 assert_contains "${RENDERED_FILE}" '      - dhcp://system'
 
-printf '[3/3] public auto mode falls back to configured DoH servers for bit suffix\n'
+printf '[3/5] public auto mode falls back to configured DoH servers for bit suffix\n'
 cp "${PROFILE_FILE}" "${RENDERED_FILE}"
 export MOCK_DIG_PRIVATE_HOSTS=""
 mutator_mihomo_render_overlay "${PROFILE_FILE}" "${RENDERED_FILE}"
@@ -149,7 +149,22 @@ assert_contains "${RENDERED_FILE}" '      - https://dns.alidns.com/dns-query'
 assert_contains "${RENDERED_FILE}" '      - https://cloudflare-dns.com/dns-query'
 assert_contains "${RENDERED_FILE}" '      - https://dns.google/dns-query'
 
-printf '[4/4] service network signature change triggers reload and renew\n'
+printf '[4/5] status surfaces org dns detection fields\n'
+export BOX_OUTPUT_FORMAT="json"
+SERVICE_STATUS_JSON="${TMP_DIR}/service-status.json"
+FIREWALL_STATUS_JSON="${TMP_DIR}/firewall-status.json"
+service_status >"${SERVICE_STATUS_JSON}"
+firewall_status >"${FIREWALL_STATUS_JSON}"
+assert_contains "${SERVICE_STATUS_JSON}" '"org_dns_mode_configured":"auto"'
+assert_contains "${SERVICE_STATUS_JSON}" '"org_dns_mode_active":"public"'
+assert_contains "${SERVICE_STATUS_JSON}" '"org_dns_iface":"wlan0"'
+assert_contains "${SERVICE_STATUS_JSON}" '"org_dns_servers":["https://dns.alidns.com/dns-query","https://cloudflare-dns.com/dns-query","https://dns.google/dns-query"]'
+assert_contains "${SERVICE_STATUS_JSON}" '"org_dns_suffixes":["+.bit.edu.cn"]'
+assert_contains "${SERVICE_STATUS_JSON}" '"org_dns_probe_hosts":["lexue.bit.edu.cn","xk.bit.edu.cn"]'
+assert_contains "${FIREWALL_STATUS_JSON}" '"org_dns_mode_active":"public"'
+assert_contains "${FIREWALL_STATUS_JSON}" '"org_dns_iface":"wlan0"'
+
+printf '[5/5] service network signature change triggers reload and renew\n'
 COMMAND_LOG="${TMP_DIR}/boxctl.commands"
 MOCK_BOXCTL="${TMP_DIR}/mock-boxctl.sh"
 
@@ -162,7 +177,7 @@ chmod +x "${MOCK_BOXCTL}"
 
 export BOXCTL_SELF_PATH="${MOCK_BOXCTL}"
 service_handle_network_signature_change \
-  "campus|wlan0|10.0.32.32,10.0.32.33" \
+  "org|wlan0|10.0.32.32,10.0.32.33" \
   "public" \
   "2026-04-05T06:00:00Z"
 wait_for_contains "${COMMAND_LOG}" "service reload"

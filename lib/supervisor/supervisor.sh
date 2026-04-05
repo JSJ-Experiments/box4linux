@@ -113,19 +113,49 @@ service_network_signature() {
     return 1
   fi
 
-  active_mode="$(mihomo_detect_campus_dns_mode)"
-  if [[ "${active_mode}" == "campus" ]]; then
-    iface="$(mihomo_active_default_iface || true)"
-    mapfile -t dns_servers < <(mihomo_active_link_dns_servers "${iface}" || true)
+  active_mode="$(box_detect_org_dns_mode)"
+  if [[ "${active_mode}" == "org" ]]; then
+    iface="$(box_org_dns_status_iface || true)"
+    mapfile -t dns_servers < <(box_org_dns_status_servers || true)
     if [[ "${#dns_servers[@]}" -gt 0 ]]; then
       local IFS=,
       dns_csv="${dns_servers[*]}"
     fi
-    printf 'campus|%s|%s\n' "${iface}" "${dns_csv}"
+    printf 'org|%s|%s\n' "${iface}" "${dns_csv}"
     return 0
   fi
 
-  printf 'public\n'
+  printf '%s\n' "${active_mode}"
+}
+
+service_org_dns_mode_configured() {
+  box_org_dns_mode_configured
+}
+
+service_org_dns_mode_active() {
+  box_detect_org_dns_mode
+}
+
+service_org_dns_iface() {
+  box_org_dns_status_iface
+}
+
+service_org_dns_servers_csv() {
+  local -a servers=()
+  mapfile -t servers < <(box_org_dns_status_servers || true)
+  join_by "," "${servers[@]}"
+}
+
+service_org_dns_suffixes_csv() {
+  local -a suffixes=()
+  mapfile -t suffixes < <(box_org_dns_status_suffixes || true)
+  join_by "," "${suffixes[@]}"
+}
+
+service_org_dns_probe_hosts_csv() {
+  local -a hosts=()
+  mapfile -t hosts < <(box_org_dns_status_probe_hosts || true)
+  join_by "," "${hosts[@]}"
 }
 
 service_monitor_cleanup() {
@@ -456,6 +486,10 @@ service_print_status_text() {
   local status="${1:?missing status}"
   local pid="${2:-0}"
   local rendered_path="${3:-}"
+  local -a org_dns_servers=() org_dns_suffixes=() org_dns_probe_hosts=()
+  mapfile -t org_dns_servers < <(box_org_dns_status_servers || true)
+  mapfile -t org_dns_suffixes < <(box_org_dns_status_suffixes || true)
+  mapfile -t org_dns_probe_hosts < <(box_org_dns_status_probe_hosts || true)
   printf 'status=%s\n' "${status}"
   printf 'core=%s\n' "${BOX_CORE}"
   printf 'pid=%s\n' "${pid:-0}"
@@ -464,6 +498,12 @@ service_print_status_text() {
   printf 'dns_enhanced_mode=%s\n' "${BOX_DNS_ENHANCED_MODE}"
   printf 'ipv6_enabled=%s\n' "${BOX_IPV6_ENABLED}"
   printf 'ipv6_effective_mode=%s\n' "$(firewall_ipv6_effective_mode)"
+  printf 'org_dns_mode_configured=%s\n' "$(service_org_dns_mode_configured)"
+  printf 'org_dns_mode_active=%s\n' "$(service_org_dns_mode_active)"
+  printf 'org_dns_iface=%s\n' "$(service_org_dns_iface)"
+  printf 'org_dns_servers=%s\n' "$(join_by "," "${org_dns_servers[@]}")"
+  printf 'org_dns_suffixes=%s\n' "$(join_by "," "${org_dns_suffixes[@]}")"
+  printf 'org_dns_probe_hosts=%s\n' "$(join_by "," "${org_dns_probe_hosts[@]}")"
   printf 'rendered_config=%s\n' "${rendered_path}"
   printf 'config=%s\n' "${BOX_CONFIG_FILE:-none}"
 }
@@ -472,7 +512,11 @@ service_print_status_json() {
   local status="${1:?missing status}"
   local pid="${2:-0}"
   local rendered_path="${3:-}"
-  printf '{%s,%s,%s,%s,%s,%s,%s,%s,%s,%s}\n' \
+  local -a org_dns_servers=() org_dns_suffixes=() org_dns_probe_hosts=()
+  mapfile -t org_dns_servers < <(box_org_dns_status_servers || true)
+  mapfile -t org_dns_suffixes < <(box_org_dns_status_suffixes || true)
+  mapfile -t org_dns_probe_hosts < <(box_org_dns_status_probe_hosts || true)
+  printf '{%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s}\n' \
     "$(json_pair "status" "${status}")" \
     "$(json_pair "core" "${BOX_CORE}")" \
     "$(json_num_pair "pid" "${pid:-0}")" \
@@ -481,6 +525,12 @@ service_print_status_json() {
     "$(json_pair "dns_enhanced_mode" "${BOX_DNS_ENHANCED_MODE}")" \
     "$(json_bool_pair "ipv6_enabled" "${BOX_IPV6_ENABLED}")" \
     "$(json_pair "ipv6_effective_mode" "$(firewall_ipv6_effective_mode)")" \
+    "$(json_pair "org_dns_mode_configured" "$(service_org_dns_mode_configured)")" \
+    "$(json_pair "org_dns_mode_active" "$(service_org_dns_mode_active)")" \
+    "$(json_pair "org_dns_iface" "$(service_org_dns_iface)")" \
+    "$(json_array_pair "org_dns_servers" "${org_dns_servers[@]}")" \
+    "$(json_array_pair "org_dns_suffixes" "${org_dns_suffixes[@]}")" \
+    "$(json_array_pair "org_dns_probe_hosts" "${org_dns_probe_hosts[@]}")" \
     "$(json_pair "rendered_config" "${rendered_path}")" \
     "$(json_pair "config" "${BOX_CONFIG_FILE:-none}")"
 }

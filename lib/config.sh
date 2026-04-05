@@ -246,6 +246,7 @@ toml_value() {
       section = ""
       capture = 0
       value = ""
+      emitted = 0
     }
     /^[[:space:]]*#/ { next }
     /^[[:space:]]*$/ {
@@ -257,6 +258,7 @@ toml_value() {
     /^[[:space:]]*\[/ {
       if (capture) {
         print value
+        emitted = 1
         exit
       }
       line = $0
@@ -270,6 +272,7 @@ toml_value() {
       append_value($0)
       if ($0 ~ /\]/) {
         print value
+        emitted = 1
         exit
       }
       next
@@ -286,11 +289,12 @@ toml_value() {
           next
         }
         print value
+        emitted = 1
         exit
       }
     }
     END {
-      if (capture && value != "") {
+      if (!emitted && capture && value != "") {
         print value
       }
     }
@@ -379,6 +383,39 @@ config_read_array() {
   printf '%s\n' "${values[@]}"
 }
 
+config_read_value_first() {
+  local file="${1:?missing file}"
+  local section="${2:?missing section}"
+  shift 2 || true
+  local key value
+
+  for key in "$@"; do
+    [[ -n "${key}" ]] || continue
+    value="$(config_read_value "${file}" "${section}" "${key}" || true)"
+    if [[ -n "${value}" ]]; then
+      printf '%s\n' "${value}"
+      return 0
+    fi
+  done
+  return 1
+}
+
+config_read_array_first() {
+  local file="${1:?missing file}"
+  local section="${2:?missing section}"
+  shift 2 || true
+  local key
+
+  for key in "$@"; do
+    [[ -n "${key}" ]] || continue
+    if config_read_array "${file}" "${section}" "${key}" >/dev/null 2>&1; then
+      config_read_array "${file}" "${section}" "${key}"
+      return 0
+    fi
+  done
+  return 1
+}
+
 config_read_value() {
   local file="${1:?missing file}"
   local section="${2:?missing section}"
@@ -441,6 +478,126 @@ validate_bool_string() {
   esac
 }
 
+normalize_org_dns_mode() {
+  case "${1:-}" in
+    campus) printf 'org\n' ;;
+    auto|org|public) printf '%s\n' "${1}" ;;
+    *) printf '%s\n' "${1:-}" ;;
+  esac
+}
+
+box_active_default_iface() {
+  local ip_cmd="${BOX_IP_CMD:-ip}"
+  command -v "${ip_cmd}" >/dev/null 2>&1 || return 1
+  "${ip_cmd}" route show default 2>/dev/null | awk '/^default / { for (i = 1; i <= NF; i++) if ($i == "dev" && (i + 1) <= NF) { print $(i + 1); exit } }'
+}
+
+box_active_link_dns_servers() {
+  local iface="${1:-}"
+  local resolvectl_cmd="${BOX_RESOLVECTL_CMD:-resolvectl}"
+  [[ -n "${iface}" ]] || return 1
+  command -v "${resolvectl_cmd}" >/dev/null 2>&1 || return 1
+  "${resolvectl_cmd}" dns "${iface}" 2>/dev/null | awk '
+    {
+      for (i = 1; i <= NF; i++) {
+        if ($i ~ /^([0-9]{1,3}\.){3}[0-9]{1,3}$/) {
+          print $i
+        }
+      }
+    }
+  '
+}
+
+box_probe_host_via_dns() {
+  local server="${1:-}"
+  local host="${2:-}"
+  local dig_cmd="${BOX_DIG_CMD:-dig}"
+  [[ -n "${server}" && -n "${host}" ]] || return 1
+  command -v "${dig_cmd}" >/dev/null 2>&1 || return 1
+  "${dig_cmd}" +time=3 +tries=1 +short @"${server}" "${host}" A 2>/dev/null | awk 'NF { print; exit }'
+}
+
+box_is_private_ipv4() {
+  local ip="${1:-}"
+  [[ "${ip}" =~ ^10\. ]] && return 0
+  [[ "${ip}" =~ ^192\.168\. ]] && return 0
+  if [[ "${ip}" =~ ^172\.([0-9]+)\. ]]; then
+    local second="${BASH_REMATCH[1]}"
+    (( second >= 16 && second <= 31 )) && return 0
+  fi
+  return 1
+}
+
+box_org_dns_mode_configured() {
+  local mode
+  if [[ "${#BOX_CAMPUS_DNS_SUFFIXES[@]}" -eq 0 ]]; then
+    printf 'disabled\n'
+    return 0
+  fi
+  mode="$(normalize_org_dns_mode "${BOX_CAMPUS_DNS_MODE}")"
+  printf '%s\n' "${mode}"
+}
+
+box_detect_org_dns_mode() {
+  local configured_mode iface dns_server probe_host answer
+  local -a dns_servers=()
+
+  configured_mode="$(box_org_dns_mode_configured)"
+  case "${configured_mode}" in
+    disabled|org|public)
+      printf '%s\n' "${configured_mode}"
+      return 0
+      ;;
+  esac
+
+  iface="$(box_active_default_iface || true)"
+  mapfile -t dns_servers < <(box_active_link_dns_servers "${iface}" || true)
+  if [[ "${#dns_servers[@]}" -eq 0 ]]; then
+    printf 'public\n'
+    return 0
+  fi
+
+  for probe_host in "${BOX_CAMPUS_DNS_PROBE_HOSTS[@]}"; do
+    [[ -n "${probe_host}" ]] || continue
+    for dns_server in "${dns_servers[@]}"; do
+      answer="$(box_probe_host_via_dns "${dns_server}" "${probe_host}" || true)"
+      if [[ -n "${answer}" ]] && box_is_private_ipv4 "${answer}"; then
+        printf 'org\n'
+        return 0
+      fi
+    done
+  done
+
+  printf 'public\n'
+}
+
+box_org_dns_status_iface() {
+  box_active_default_iface || true
+}
+
+box_org_dns_status_servers() {
+  local active_mode iface
+  active_mode="$(box_detect_org_dns_mode)"
+  case "${active_mode}" in
+    disabled) return 0 ;;
+    org)
+      iface="$(box_org_dns_status_iface)"
+      box_active_link_dns_servers "${iface}" || true
+      ;;
+    public)
+      printf '%s\n' "${BOX_CAMPUS_DNS_PUBLIC_SERVERS[@]}"
+      ;;
+  esac
+}
+
+box_org_dns_status_suffixes() {
+  printf '%s\n' "${BOX_CAMPUS_DNS_SUFFIXES[@]}"
+}
+
+box_org_dns_status_probe_hosts() {
+  printf '%s\n' "${BOX_CAMPUS_DNS_PROBE_HOSTS[@]}"
+}
+
 validate_config() {
   case "${BOX_CORE}" in
     mihomo|sing-box) ;;
@@ -494,11 +651,11 @@ validate_config() {
     return "${E_CONFIG}"
   fi
 
-  case "${BOX_CAMPUS_DNS_MODE}" in
-    auto|campus|public) ;;
+  case "$(normalize_org_dns_mode "${BOX_CAMPUS_DNS_MODE}")" in
+    auto|org|public) ;;
     *)
-      log "ERROR" "config" "E_CONFIG_CAMPUS_DNS_MODE" \
-        "network campus_dns_mode must be auto|campus|public: ${BOX_CAMPUS_DNS_MODE}"
+      log "ERROR" "config" "E_CONFIG_ORG_DNS_MODE" \
+        "network org_dns_mode must be auto|org|public (legacy campus alias accepted): ${BOX_CAMPUS_DNS_MODE}"
       return "${E_CONFIG}"
       ;;
   esac
@@ -749,16 +906,17 @@ load_config() {
   BOX_DNS_ENHANCED_MODE="$(config_read_value "${BOX_CONFIG_FILE}" "network" "dns_enhanced_mode" || printf '%s' "${BOX_DNS_ENHANCED_MODE}")"
   BOX_DNS_COEXIST_MODE="$(config_read_value "${BOX_CONFIG_FILE}" "network" "dns_coexist_mode" || printf '%s' "${BOX_DNS_COEXIST_MODE}")"
   BOX_IPV6_ENABLED="$(config_read_value "${BOX_CONFIG_FILE}" "network" "ipv6" || printf '%s' "${BOX_IPV6_ENABLED}")"
-  BOX_CAMPUS_DNS_MODE="$(config_read_value "${BOX_CONFIG_FILE}" "network" "campus_dns_mode" || printf '%s' "${BOX_CAMPUS_DNS_MODE}")"
+  BOX_CAMPUS_DNS_MODE="$(config_read_value_first "${BOX_CONFIG_FILE}" "network" "org_dns_mode" "campus_dns_mode" || printf '%s' "${BOX_CAMPUS_DNS_MODE}")"
   BOX_TAILSCALE_IFACE="$(config_read_value "${BOX_CONFIG_FILE}" "network" "tailscale_iface" || printf '%s' "${BOX_TAILSCALE_IFACE}")"
   BOX_TAILNET_IPV4_CIDR="$(config_read_value "${BOX_CONFIG_FILE}" "network" "tailnet_ipv4_cidr" || printf '%s' "${BOX_TAILNET_IPV4_CIDR}")"
   BOX_TAILNET_IPV6_CIDR="$(config_read_value "${BOX_CONFIG_FILE}" "network" "tailnet_ipv6_cidr" || printf '%s' "${BOX_TAILNET_IPV6_CIDR}")"
   BOX_TAILSCALE_DNS_RESOLVER="$(config_read_value "${BOX_CONFIG_FILE}" "network" "tailscale_dns_resolver" || printf '%s' "${BOX_TAILSCALE_DNS_RESOLVER}")"
   BOX_TAILSCALE_FWMARK="$(config_read_value "${BOX_CONFIG_FILE}" "network" "tailscale_fwmark" || printf '%s' "${BOX_TAILSCALE_FWMARK}")"
   BOX_TAILSCALE_ROUTE_TABLE="$(config_read_value "${BOX_CONFIG_FILE}" "network" "tailscale_route_table" || printf '%s' "${BOX_TAILSCALE_ROUTE_TABLE}")"
-  mapfile -t BOX_CAMPUS_DNS_SUFFIXES < <(config_read_array "${BOX_CONFIG_FILE}" "network" "campus_dns_suffixes" || printf '%s\n' "${BOX_CAMPUS_DNS_SUFFIXES[@]}")
-  mapfile -t BOX_CAMPUS_DNS_PROBE_HOSTS < <(config_read_array "${BOX_CONFIG_FILE}" "network" "campus_dns_probe_hosts" || printf '%s\n' "${BOX_CAMPUS_DNS_PROBE_HOSTS[@]}")
-  mapfile -t BOX_CAMPUS_DNS_PUBLIC_SERVERS < <(config_read_array "${BOX_CONFIG_FILE}" "network" "campus_dns_public_servers" || printf '%s\n' "${BOX_CAMPUS_DNS_PUBLIC_SERVERS[@]}")
+  mapfile -t BOX_CAMPUS_DNS_SUFFIXES < <(config_read_array_first "${BOX_CONFIG_FILE}" "network" "org_dns_suffixes" "campus_dns_suffixes" || printf '%s\n' "${BOX_CAMPUS_DNS_SUFFIXES[@]}")
+  mapfile -t BOX_CAMPUS_DNS_PROBE_HOSTS < <(config_read_array_first "${BOX_CONFIG_FILE}" "network" "org_dns_probe_hosts" "campus_dns_probe_hosts" || printf '%s\n' "${BOX_CAMPUS_DNS_PROBE_HOSTS[@]}")
+  mapfile -t BOX_CAMPUS_DNS_PUBLIC_SERVERS < <(config_read_array_first "${BOX_CONFIG_FILE}" "network" "org_dns_public_servers" "campus_dns_public_servers" || printf '%s\n' "${BOX_CAMPUS_DNS_PUBLIC_SERVERS[@]}")
+  BOX_CAMPUS_DNS_MODE="$(normalize_org_dns_mode "${BOX_CAMPUS_DNS_MODE}")"
 
   BOX_FIREWALL_BACKEND="$(config_read_value "${BOX_CONFIG_FILE}" "firewall" "backend" || printf '%s' "${BOX_FIREWALL_BACKEND}")"
   BOX_ROUTE_TABLE="$(config_read_value "${BOX_CONFIG_FILE}" "firewall" "route_table" || printf '%s' "${BOX_ROUTE_TABLE}")"

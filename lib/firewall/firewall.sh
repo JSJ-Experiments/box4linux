@@ -7,6 +7,18 @@ set -euo pipefail
 source "${BOX_LIB_DIR}/firewall/backend_iptables.sh"
 source "${BOX_LIB_DIR}/firewall/backend_nft.sh"
 
+firewall_org_dns_mode_configured() {
+  box_org_dns_mode_configured
+}
+
+firewall_org_dns_mode_active() {
+  box_detect_org_dns_mode
+}
+
+firewall_org_dns_iface() {
+  box_org_dns_status_iface
+}
+
 firewall_bool_enabled() {
   case "${1:-}" in
     true|1) return 0 ;;
@@ -214,9 +226,13 @@ firewall_collect_status() {
 
 firewall_status_text() {
   local current_status current_mode
+  local -a org_dns_servers=() org_dns_suffixes=() org_dns_probe_hosts=()
   current_status="$(firewall_read_state_value "status" || printf 'disabled')"
   current_mode="$(firewall_read_state_value "mode" || printf '%s' "${BOX_NETWORK_MODE}")"
   firewall_collect_status
+  mapfile -t org_dns_servers < <(box_org_dns_status_servers || true)
+  mapfile -t org_dns_suffixes < <(box_org_dns_status_suffixes || true)
+  mapfile -t org_dns_probe_hosts < <(box_org_dns_status_probe_hosts || true)
 
   printf 'status=%s\n' "${current_status}"
   printf 'mode=%s\n' "${current_mode}"
@@ -229,6 +245,12 @@ firewall_status_text() {
   printf 'dns_coexist_mode_active=%s\n' "${FW_DNS_COEXIST_MODE_ACTIVE}"
   printf 'ipv6_enabled=%s\n' "${BOX_IPV6_ENABLED}"
   printf 'ipv6_effective_mode=%s\n' "$(firewall_ipv6_effective_mode)"
+  printf 'org_dns_mode_configured=%s\n' "$(firewall_org_dns_mode_configured)"
+  printf 'org_dns_mode_active=%s\n' "$(firewall_org_dns_mode_active)"
+  printf 'org_dns_iface=%s\n' "$(firewall_org_dns_iface)"
+  printf 'org_dns_servers=%s\n' "$(join_by "," "${org_dns_servers[@]}")"
+  printf 'org_dns_suffixes=%s\n' "$(join_by "," "${org_dns_suffixes[@]}")"
+  printf 'org_dns_probe_hosts=%s\n' "$(join_by "," "${org_dns_probe_hosts[@]}")"
   printf 'bypass_private_ip=%s\n' "${BOX_BYPASS_PRIVATE_IP}"
   printf 'bypass_cn_ip=%s\n' "${BOX_BYPASS_CN_IP}"
   printf 'bypass_cn_file=%s\n' "${BOX_BYPASS_CN_FILE}"
@@ -257,9 +279,13 @@ firewall_status_json() {
   local current_status current_mode
   local fields
   local error_part=""
+  local -a org_dns_servers=() org_dns_suffixes=() org_dns_probe_hosts=()
   current_status="$(firewall_read_state_value "status" || printf 'disabled')"
   current_mode="$(firewall_read_state_value "mode" || printf '%s' "${BOX_NETWORK_MODE}")"
   firewall_collect_status
+  mapfile -t org_dns_servers < <(box_org_dns_status_servers || true)
+  mapfile -t org_dns_suffixes < <(box_org_dns_status_suffixes || true)
+  mapfile -t org_dns_probe_hosts < <(box_org_dns_status_probe_hosts || true)
 
   fields=(
     "$(json_pair "status" "${current_status}")"
@@ -272,6 +298,12 @@ firewall_status_json() {
     "$(json_pair "dns_coexist_mode_active" "${FW_DNS_COEXIST_MODE_ACTIVE}")"
     "$(json_bool_pair "ipv6_enabled" "${BOX_IPV6_ENABLED}")"
     "$(json_pair "ipv6_effective_mode" "$(firewall_ipv6_effective_mode)")"
+    "$(json_pair "org_dns_mode_configured" "$(firewall_org_dns_mode_configured)")"
+    "$(json_pair "org_dns_mode_active" "$(firewall_org_dns_mode_active)")"
+    "$(json_pair "org_dns_iface" "$(firewall_org_dns_iface)")"
+    "$(json_array_pair "org_dns_servers" "${org_dns_servers[@]}")"
+    "$(json_array_pair "org_dns_suffixes" "${org_dns_suffixes[@]}")"
+    "$(json_array_pair "org_dns_probe_hosts" "${org_dns_probe_hosts[@]}")"
     "$(json_bool_pair "bypass_private_ip" "${BOX_BYPASS_PRIVATE_IP}")"
     "$(json_bool_pair "bypass_cn_ip" "${BOX_BYPASS_CN_IP}")"
     "$(json_pair "bypass_cn_file" "${BOX_BYPASS_CN_FILE}")"

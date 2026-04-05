@@ -13,11 +13,11 @@ dns_hijack_mode = "redirect"
 dns_enhanced_mode = "fake-ip"
 dns_coexist_mode = "preserve_tailnet"
 ipv6 = true
-# Repo default is already preconfigured for BIT campus/public split DNS.
-campus_dns_mode = "auto"
-campus_dns_suffixes = ["+.bit.edu.cn"]
-campus_dns_probe_hosts = ["lexue.bit.edu.cn", "xk.bit.edu.cn"]
-campus_dns_public_servers = [
+# Repo default is already preconfigured for BIT org/public split DNS.
+org_dns_mode = "auto"
+org_dns_suffixes = ["+.bit.edu.cn"]
+org_dns_probe_hosts = ["lexue.bit.edu.cn", "xk.bit.edu.cn"]
+org_dns_public_servers = [
   "https://dns.alidns.com/dns-query",
   "https://cloudflare-dns.com/dns-query",
   "https://dns.google/dns-query",
