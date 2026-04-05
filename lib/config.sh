@@ -125,9 +125,9 @@ config_defaults() {
   BOX_TAILSCALE_DNS_RESOLVER="100.100.100.100"
   BOX_TAILSCALE_FWMARK="0x80000/0xff0000"
   BOX_TAILSCALE_ROUTE_TABLE="52"
-  BOX_CAMPUS_DNS_SUFFIXES=()
-  BOX_CAMPUS_DNS_PROBE_HOSTS=()
-  BOX_CAMPUS_DNS_PUBLIC_SERVERS=()
+  BOX_CAMPUS_DNS_SUFFIXES=("+.bit.edu.cn")
+  BOX_CAMPUS_DNS_PROBE_HOSTS=("lexue.bit.edu.cn" "xk.bit.edu.cn")
+  BOX_CAMPUS_DNS_PUBLIC_SERVERS=("https://dns.alidns.com/dns-query" "https://cloudflare-dns.com/dns-query" "https://dns.google/dns-query")
   BOX_FIREWALL_BACKEND="iptables"
   BOX_ROUTE_TABLE="2024"
   BOX_ROUTE_PREF="100"

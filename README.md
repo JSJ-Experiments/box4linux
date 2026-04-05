@@ -295,6 +295,9 @@ On tags (`v*`):
 - `boxctl firewall status --json` reports the same IPv6/DNS fields plus backend capability flags.
 - If `dns_enhanced_mode = "fake-ip"`, local name resolution can return fake-IP ranges such as `198.18.0.0/16` while browser/devtools still show the real remote server address used by Mihomo's outbound connection.
 - There is no reference-backed `prefer_ipv4|prefer_ipv6|default` selector. The supported family control is `network.ipv6 = true|false`.
+- This repo's shipped `etc/box/box.toml` is already preconfigured for a BIT campus/public split DNS policy:
+  - `+.bit.edu.cn` auto-switches between current campus DNS and the configured DoH resolvers
+  - `+.edu.cn` stays on `dhcp://system` / `system`
 - Campus suffix handling is adaptive rather than pinned:
   - in `campus_dns_mode = "auto"`, Box inspects the active default-route interface, reads its live DNS servers, and probes the configured campus hosts
   - if those probes resolve to RFC1918 addresses, configured suffixes such as `+.bit.edu.cn` render to the current link DNS servers
