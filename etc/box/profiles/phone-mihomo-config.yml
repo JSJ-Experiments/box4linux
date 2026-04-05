@@ -116,9 +116,6 @@ dns:
     - https://doh.pub/dns-query
     - tls://8.8.4.4
   nameserver-policy:
-    "+.bit.edu.cn":
-      - dhcp://system
-      - system
     "+.edu.cn":
       - dhcp://system
       - system
