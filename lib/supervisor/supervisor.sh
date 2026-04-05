@@ -15,6 +15,11 @@ service_pid_file() {
   printf '%s/box.pid\n' "${BOX_RUN_DIR}"
 }
 
+service_monitor_pid_file() {
+  init_runtime_paths
+  printf '%s/service-monitor.pid\n' "${BOX_RUN_DIR}"
+}
+
 service_state_file() {
   init_runtime_paths
   printf '%s/runtime.snapshot.json\n' "${BOX_RUN_DIR}"
@@ -74,6 +79,147 @@ render_runtime_config() {
       return "${E_CORE_START}"
       ;;
   esac
+}
+
+service_monitor_ip_cmd() {
+  printf '%s\n' "${BOX_IP_CMD:-ip}"
+}
+
+service_monitor_event_source() {
+  local ip_tool
+
+  if [[ -n "${BOX_SERVICE_EVENT_FILE:-}" ]]; then
+    mkdir -p "$(dirname "${BOX_SERVICE_EVENT_FILE}")"
+    touch "${BOX_SERVICE_EVENT_FILE}"
+    tail -n 0 -F "${BOX_SERVICE_EVENT_FILE}"
+    return 0
+  fi
+
+  ip_tool="$(service_monitor_ip_cmd)"
+  exec "${ip_tool}" monitor link route address
+}
+
+service_monitor_enabled() {
+  [[ "${BOX_CORE}" == "mihomo" ]] || return 1
+  [[ "${#BOX_CAMPUS_DNS_SUFFIXES[@]}" -gt 0 ]] || return 1
+  return 0
+}
+
+service_network_signature() {
+  local active_mode iface dns_csv=""
+  local -a dns_servers=()
+
+  if ! service_monitor_enabled; then
+    return 1
+  fi
+
+  active_mode="$(mihomo_detect_campus_dns_mode)"
+  if [[ "${active_mode}" == "campus" ]]; then
+    iface="$(mihomo_active_default_iface || true)"
+    mapfile -t dns_servers < <(mihomo_active_link_dns_servers "${iface}" || true)
+    if [[ "${#dns_servers[@]}" -gt 0 ]]; then
+      local IFS=,
+      dns_csv="${dns_servers[*]}"
+    fi
+    printf 'campus|%s|%s\n' "${iface}" "${dns_csv}"
+    return 0
+  fi
+
+  printf 'public\n'
+}
+
+service_monitor_cleanup() {
+  local pid_file current_pid
+  pid_file="$(service_monitor_pid_file)"
+  current_pid="$(read_pid_file "${pid_file}" || true)"
+  if [[ "${current_pid}" == "$$" ]]; then
+    rm -f "${pid_file}"
+  fi
+}
+
+service_handle_network_signature_change() {
+  local previous_sig="${1:-}"
+  local current_sig="${2:-}"
+  local event_ts="${3:-$(timestamp_utc)}"
+
+  if [[ "${current_sig}" == "${previous_sig}" ]]; then
+    return 1
+  fi
+
+  log "INFO" "service" "SERVICE_NETWORK_CHANGE" \
+    "network signature changed old=${previous_sig:-none} new=${current_sig:-none} event_ts=${event_ts}"
+  "${BOXCTL_SELF_PATH}" service reload >>"${BOX_LOG_DIR}/service.log" 2>&1 || \
+    log "WARN" "service" "SERVICE_NETWORK_RELOAD_FAILED" "service reload failed after network change"
+  "${BOXCTL_SELF_PATH}" firewall renew >>"${BOX_LOG_DIR}/service.log" 2>&1 || \
+    log "WARN" "service" "SERVICE_NETWORK_FIREWALL_RENEW_FAILED" "firewall renew failed after network change"
+  return 0
+}
+
+service_monitor_loop() {
+  local pid_file line pending_ts="" next_line event_pid="" previous_sig="" current_sig=""
+  local debounce_sec="${BOX_SERVICE_MONITOR_DEBOUNCE_SECONDS:-2}"
+
+  require_root || return 1
+  load_config
+  init_runtime_paths
+
+  if ! service_monitor_enabled; then
+    return 0
+  fi
+
+  pid_file="$(service_monitor_pid_file)"
+  printf '%s\n' "$$" >"${pid_file}"
+  previous_sig="$(service_network_signature || true)"
+
+  coproc SERVICE_EVENTS { service_monitor_event_source; }
+  event_pid="${SERVICE_EVENTS_PID:-}"
+  trap '[[ -n "'"${event_pid}"'" ]] && kill "'"${event_pid}"'" >/dev/null 2>&1 || true; service_monitor_cleanup; exit 0' EXIT INT TERM
+
+  while true; do
+    if IFS= read -r -t 1 line <&"${SERVICE_EVENTS[0]}"; then
+      pending_ts="$(timestamp_utc)"
+      while IFS= read -r -t "${debounce_sec}" next_line <&"${SERVICE_EVENTS[0]}"; do
+        pending_ts="$(timestamp_utc)"
+      done
+
+      current_sig="$(service_network_signature || true)"
+      if service_handle_network_signature_change "${previous_sig}" "${current_sig}" "${pending_ts}"; then
+        previous_sig="${current_sig}"
+      fi
+    fi
+  done
+}
+
+service_spawn_monitor() {
+  local pid_file pid
+
+  if ! service_monitor_enabled; then
+    return 0
+  fi
+
+  pid_file="$(service_monitor_pid_file)"
+  pid="$(read_pid_file "${pid_file}" || true)"
+  if is_pid_alive "${pid}"; then
+    return 0
+  fi
+
+  nohup "${BOXCTL_SELF_PATH}" service monitor >>"${BOX_LOG_DIR}/service.log" 2>&1 &
+  printf '%s\n' "$!" >"${pid_file}"
+  log "INFO" "service" "SERVICE_MONITOR_STARTED" "service monitor started pid=$!"
+}
+
+service_stop_monitor() {
+  local pid_file pid
+  pid_file="$(service_monitor_pid_file)"
+  pid="$(read_pid_file "${pid_file}" || true)"
+  if is_pid_alive "${pid}"; then
+    kill -TERM "${pid}" >/dev/null 2>&1 || true
+    sleep 1
+    if is_pid_alive "${pid}"; then
+      kill -KILL "${pid}" >/dev/null 2>&1 || true
+    fi
+  fi
+  rm -f "${pid_file}"
 }
 
 resolve_core_bin() {
@@ -219,6 +365,7 @@ service_start_locked() {
   fi
 
   write_runtime_snapshot "healthy" "${new_pid}" "${rendered_path}"
+  service_spawn_monitor || true
   log "INFO" "service" "SERVICE_STARTED" "service started core=${BOX_CORE} pid=${new_pid} overlay=${rendered_path}"
 }
 
@@ -235,6 +382,7 @@ service_stop_locked() {
     pid="$(discover_core_pid "${rendered_path}" "${BOX_CORE_WORKDIR}" || true)"
   fi
 
+  service_stop_monitor
   firewall_disable || true
 
   if is_pid_alive "${pid}"; then
@@ -274,6 +422,11 @@ service_reload_locked() {
   init_runtime_paths
   rendered_path="$(rendered_config_path)"
   core_bin="$(resolve_core_bin)" || return "${E_CORE_START}"
+  render_runtime_config "${rendered_path}"
+  if ! check_core_config "${core_bin}" "${rendered_path}" "${BOX_CORE_WORKDIR}"; then
+    log "ERROR" "service" "E_CORE_CONFIG" "core configuration check failed for ${rendered_path}"
+    return "${E_CORE_START}"
+  fi
   case "${BOX_CORE}" in
     mihomo)
       adapter_mihomo_reload "${rendered_path}" "${BOX_CORE_WORKDIR}" "${core_bin}" >/dev/null 2>&1 || rc=$?
@@ -371,6 +524,7 @@ supervisor_cmd() {
     restart) service_restart ;;
     reload) service_reload ;;
     status) service_status ;;
+    monitor) service_monitor_loop ;;
     *)
       printf 'usage: boxctl service <start|stop|restart|reload|status> [--json]\n' >&2
       return 2

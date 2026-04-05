@@ -298,6 +298,7 @@ On tags (`v*`):
 - This repo's shipped `etc/box/box.toml` is already preconfigured for a BIT campus/public split DNS policy:
   - `+.bit.edu.cn` auto-switches between current campus DNS and the configured DoH resolvers
   - `+.edu.cn` stays on `dhcp://system` / `system`
+  - the running service also watches link/route/address changes and safely reloads the rendered Mihomo DNS policy when the detected campus/public environment signature changes
 - Campus suffix handling is adaptive rather than pinned:
   - in `campus_dns_mode = "auto"`, Box inspects the active default-route interface, reads its live DNS servers, and probes the configured campus hosts
   - if those probes resolve to RFC1918 addresses, configured suffixes such as `+.bit.edu.cn` render to the current link DNS servers

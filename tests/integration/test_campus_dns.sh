@@ -60,6 +60,24 @@ assert_contains() {
   fi
 }
 
+wait_for_contains() {
+  local file="${1:?missing file}"
+  local pattern="${2:?missing pattern}"
+  local attempts="${3:-30}"
+  local i
+
+  for ((i = 0; i < attempts; i++)); do
+    if [[ -f "${file}" ]] && grep -Fq "${pattern}" "${file}"; then
+      return 0
+    fi
+    sleep 0.1
+  done
+
+  printf 'ASSERT WAIT FAILED: %s not found in %s\n' "${pattern}" "${file}" >&2
+  [[ -f "${file}" ]] && cat "${file}" >&2
+  exit 1
+}
+
 export BOX_IP_CMD="${MOCK_DIR}/ip"
 export BOX_RESOLVECTL_CMD="${MOCK_DIR}/resolvectl"
 export BOX_DIG_CMD="${MOCK_DIR}/dig"
@@ -82,6 +100,7 @@ export BOX_IPV6_ENABLED="false"
 export BOX_DNS_PORT="1053"
 export BOX_REDIR_PORT="9797"
 export BOX_TPROXY_PORT="9898"
+export BOX_UNSAFE_SKIP_ROOT_CHECK="1"
 
 # shellcheck disable=SC1091
 source "${ROOT_DIR}/lib/common.sh"
@@ -89,6 +108,16 @@ source "${ROOT_DIR}/lib/common.sh"
 source "${ROOT_DIR}/lib/config.sh"
 # shellcheck disable=SC1091
 source "${ROOT_DIR}/lib/supervisor/mutator_mihomo.sh"
+# shellcheck disable=SC1091
+source "${ROOT_DIR}/lib/supervisor/adapter_mihomo.sh"
+# shellcheck disable=SC1091
+source "${ROOT_DIR}/lib/supervisor/adapter_sing_box.sh"
+# shellcheck disable=SC1091
+source "${ROOT_DIR}/lib/supervisor/mutator_sing_box.sh"
+# shellcheck disable=SC1091
+source "${ROOT_DIR}/lib/firewall/firewall.sh"
+# shellcheck disable=SC1091
+source "${ROOT_DIR}/lib/supervisor/supervisor.sh"
 
 printf '[1/3] multiline campus dns arrays parse from box.toml\n'
 export BOX_CONFIG_FILE="${CONFIG_FILE}"
@@ -119,5 +148,24 @@ assert_contains "${RENDERED_FILE}" '    "+.bit.edu.cn":'
 assert_contains "${RENDERED_FILE}" '      - https://dns.alidns.com/dns-query'
 assert_contains "${RENDERED_FILE}" '      - https://cloudflare-dns.com/dns-query'
 assert_contains "${RENDERED_FILE}" '      - https://dns.google/dns-query'
+
+printf '[4/4] service network signature change triggers reload and renew\n'
+COMMAND_LOG="${TMP_DIR}/boxctl.commands"
+MOCK_BOXCTL="${TMP_DIR}/mock-boxctl.sh"
+
+cat >"${MOCK_BOXCTL}" <<EOF
+#!/usr/bin/env bash
+set -euo pipefail
+printf '%s\n' "\$*" >>"${COMMAND_LOG}"
+EOF
+chmod +x "${MOCK_BOXCTL}"
+
+export BOXCTL_SELF_PATH="${MOCK_BOXCTL}"
+service_handle_network_signature_change \
+  "campus|wlan0|10.0.32.32,10.0.32.33" \
+  "public" \
+  "2026-04-05T06:00:00Z"
+wait_for_contains "${COMMAND_LOG}" "service reload"
+wait_for_contains "${COMMAND_LOG}" "firewall renew"
 
 printf 'PASS: campus dns integration checks completed\n'

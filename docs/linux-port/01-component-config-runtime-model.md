@@ -155,6 +155,7 @@ This snapshot is used by:
 - In `campus_dns_mode = "auto"`, Mihomo overlay rendering inspects the active default-route interface, reads its live DNS servers via `resolvectl`, and probes `network.campus_dns_probe_hosts`.
 - If any probe host resolves to RFC1918 space, those suffixes render to the current link DNS servers.
 - Otherwise the suffixes render to `network.campus_dns_public_servers`, which should be DoH endpoints rather than a hardcoded campus resolver IP.
+- While the service is running, a lightweight service-owned monitor watches link/route/address changes and triggers a safe reload plus firewall renew when that campus/public signature changes.
 - Operational presets:
   - `mixed + ipv6=true + fake-ip`: default desktop compromise, IPv4 proxied and IPv6 direct
   - `mixed + ipv6=false + fake-ip`: force IPv4 preference without changing firewall mode

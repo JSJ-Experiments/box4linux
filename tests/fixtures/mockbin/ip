@@ -77,7 +77,11 @@ case "${cmd}:${subcmd}" in
     ;;
   route:show)
     if [[ "${1:-}" == "default" ]]; then
-      printf '%s\n' "${MOCK_IP_DEFAULT_ROUTE_LINE:-default via 10.0.0.1 dev wlan0 proto dhcp src 10.0.0.2 metric 100}"
+      if [[ -n "${MOCK_IP_DEFAULT_ROUTE_FILE:-}" && -f "${MOCK_IP_DEFAULT_ROUTE_FILE}" ]]; then
+        cat "${MOCK_IP_DEFAULT_ROUTE_FILE}"
+      else
+        printf '%s\n' "${MOCK_IP_DEFAULT_ROUTE_LINE:-default via 10.0.0.1 dev wlan0 proto dhcp src 10.0.0.2 metric 100}"
+      fi
     elif [[ "${1:-}" == "table" ]]; then
       table="${2:-main}"
       grep -F "ROUTE|${table}|" "${STATE_FILE}" | sed "s/^ROUTE|${table}|//" || true

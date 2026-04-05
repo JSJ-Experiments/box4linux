@@ -8,6 +8,13 @@ shift || true
 default_iface="${MOCK_RESOLVECTL_DEFAULT_IFACE:-wlan0}"
 default_dns="${MOCK_RESOLVECTL_DEFAULT_DNS:-10.0.32.32 10.0.32.33}"
 
+if [[ -n "${MOCK_RESOLVECTL_DEFAULT_IFACE_FILE:-}" && -f "${MOCK_RESOLVECTL_DEFAULT_IFACE_FILE}" ]]; then
+  default_iface="$(tr -d '\r' <"${MOCK_RESOLVECTL_DEFAULT_IFACE_FILE}")"
+fi
+if [[ -n "${MOCK_RESOLVECTL_DEFAULT_DNS_FILE:-}" && -f "${MOCK_RESOLVECTL_DEFAULT_DNS_FILE}" ]]; then
+  default_dns="$(tr '\n' ' ' <"${MOCK_RESOLVECTL_DEFAULT_DNS_FILE}" | xargs)"
+fi
+
 case "${cmd}" in
   dns)
     if [[ $# -gt 0 ]]; then

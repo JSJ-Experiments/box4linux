@@ -28,6 +28,14 @@ if [[ -z "${host}" ]]; then
   exit 0
 fi
 
+if [[ -n "${MOCK_DIG_RESPONSES_FILE:-}" && -f "${MOCK_DIG_RESPONSES_FILE}" ]]; then
+  answer="$(awk -v wanted="${host}" '$1==wanted {print $2; exit}' "${MOCK_DIG_RESPONSES_FILE}")"
+  if [[ -n "${answer}" ]]; then
+    printf '%s\n' "${answer}"
+  fi
+  exit 0
+fi
+
 for candidate in ${private_hosts}; do
   if [[ "${host}" == "${candidate}" ]]; then
     printf '%s\n' "${private_answer}"
