@@ -1,0 +1,32 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+cmd="${1:-}"
+shift || true
+
+default_iface="${MOCK_RESOLVECTL_DEFAULT_IFACE:-wlan0}"
+default_dns="${MOCK_RESOLVECTL_DEFAULT_DNS:-10.0.32.32 10.0.32.33}"
+
+case "${cmd}" in
+  dns)
+    if [[ $# -gt 0 ]]; then
+      iface="${1}"
+      if [[ "${iface}" == "${default_iface}" ]]; then
+        printf 'Link 3 (%s): %s\n' "${iface}" "${default_dns}"
+      else
+        printf 'Link 2 (%s):\n' "${iface}"
+      fi
+    else
+      printf 'Global:\n'
+      printf 'Link 3 (%s): %s\n' "${default_iface}" "${default_dns}"
+    fi
+    ;;
+  default-route)
+    printf 'Link 3 (%s): yes\n' "${default_iface}"
+    ;;
+  flush-caches)
+    ;;
+  *)
+    ;;
+esac

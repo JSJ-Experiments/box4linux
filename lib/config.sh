@@ -17,12 +17,16 @@ BOX_DNS_HIJACK_MODE=""
 BOX_DNS_ENHANCED_MODE=""
 BOX_DNS_COEXIST_MODE=""
 BOX_IPV6_ENABLED=""
+BOX_CAMPUS_DNS_MODE=""
 BOX_TAILSCALE_IFACE=""
 BOX_TAILNET_IPV4_CIDR=""
 BOX_TAILNET_IPV6_CIDR=""
 BOX_TAILSCALE_DNS_RESOLVER=""
 BOX_TAILSCALE_FWMARK=""
 BOX_TAILSCALE_ROUTE_TABLE=""
+declare -a BOX_CAMPUS_DNS_SUFFIXES=()
+declare -a BOX_CAMPUS_DNS_PROBE_HOSTS=()
+declare -a BOX_CAMPUS_DNS_PUBLIC_SERVERS=()
 
 BOX_FIREWALL_BACKEND=""
 BOX_ROUTE_TABLE=""
@@ -114,12 +118,16 @@ config_defaults() {
   BOX_DNS_ENHANCED_MODE="fake-ip"
   BOX_DNS_COEXIST_MODE="preserve_tailnet"
   BOX_IPV6_ENABLED="true"
+  BOX_CAMPUS_DNS_MODE="auto"
   BOX_TAILSCALE_IFACE="tailscale0"
   BOX_TAILNET_IPV4_CIDR="100.64.0.0/10"
   BOX_TAILNET_IPV6_CIDR="fd7a:115c:a1e0::/48"
   BOX_TAILSCALE_DNS_RESOLVER="100.100.100.100"
   BOX_TAILSCALE_FWMARK="0x80000/0xff0000"
   BOX_TAILSCALE_ROUTE_TABLE="52"
+  BOX_CAMPUS_DNS_SUFFIXES=("+.bit.edu.cn")
+  BOX_CAMPUS_DNS_PROBE_HOSTS=("lexue.bit.edu.cn" "xk.bit.edu.cn")
+  BOX_CAMPUS_DNS_PUBLIC_SERVERS=("https://dns.alidns.com/dns-query" "https://cloudflare-dns.com/dns-query" "https://dns.google/dns-query")
   BOX_FIREWALL_BACKEND="iptables"
   BOX_ROUTE_TABLE="2024"
   BOX_ROUTE_PREF="100"
@@ -445,6 +453,15 @@ validate_config() {
     return "${E_CONFIG}"
   fi
 
+  case "${BOX_CAMPUS_DNS_MODE}" in
+    auto|campus|public) ;;
+    *)
+      log "ERROR" "config" "E_CONFIG_CAMPUS_DNS_MODE" \
+        "network campus_dns_mode must be auto|campus|public: ${BOX_CAMPUS_DNS_MODE}"
+      return "${E_CONFIG}"
+      ;;
+  esac
+
   case "${BOX_DNS_COEXIST_MODE}" in
     preserve_tailnet|strict_box) ;;
     *)
@@ -655,7 +672,7 @@ load_config() {
     log "WARN" "config" "W_CONFIG_DEFAULTS" "no box.toml found; using defaults"
     validate_config
     export BOX_CONFIG_FILE BOX_CONFIG_SOURCE
-    export BOX_CORE BOX_NETWORK_MODE BOX_TPROXY_PORT BOX_REDIR_PORT BOX_DNS_PORT BOX_DNS_HIJACK_MODE BOX_DNS_ENHANCED_MODE BOX_DNS_COEXIST_MODE BOX_IPV6_ENABLED
+    export BOX_CORE BOX_NETWORK_MODE BOX_TPROXY_PORT BOX_REDIR_PORT BOX_DNS_PORT BOX_DNS_HIJACK_MODE BOX_DNS_ENHANCED_MODE BOX_DNS_COEXIST_MODE BOX_IPV6_ENABLED BOX_CAMPUS_DNS_MODE
     export BOX_TAILSCALE_IFACE BOX_TAILNET_IPV4_CIDR BOX_TAILNET_IPV6_CIDR BOX_TAILSCALE_DNS_RESOLVER BOX_TAILSCALE_FWMARK BOX_TAILSCALE_ROUTE_TABLE
     export BOX_FIREWALL_BACKEND BOX_ROUTE_TABLE BOX_ROUTE_PREF BOX_FWMARK BOX_BYPASS_PRIVATE_IP BOX_BYPASS_CN_IP BOX_BYPASS_CN_FILE
     export BOX_POLICY_ENABLED BOX_POLICY_PROXY_MODE BOX_POLICY_DEBOUNCE_SECONDS BOX_POLICY_USE_MODULE_ON_WIFI_DISCONNECT BOX_POLICY_DISABLE_MARKER
@@ -691,12 +708,16 @@ load_config() {
   BOX_DNS_ENHANCED_MODE="$(config_read_value "${BOX_CONFIG_FILE}" "network" "dns_enhanced_mode" || printf '%s' "${BOX_DNS_ENHANCED_MODE}")"
   BOX_DNS_COEXIST_MODE="$(config_read_value "${BOX_CONFIG_FILE}" "network" "dns_coexist_mode" || printf '%s' "${BOX_DNS_COEXIST_MODE}")"
   BOX_IPV6_ENABLED="$(config_read_value "${BOX_CONFIG_FILE}" "network" "ipv6" || printf '%s' "${BOX_IPV6_ENABLED}")"
+  BOX_CAMPUS_DNS_MODE="$(config_read_value "${BOX_CONFIG_FILE}" "network" "campus_dns_mode" || printf '%s' "${BOX_CAMPUS_DNS_MODE}")"
   BOX_TAILSCALE_IFACE="$(config_read_value "${BOX_CONFIG_FILE}" "network" "tailscale_iface" || printf '%s' "${BOX_TAILSCALE_IFACE}")"
   BOX_TAILNET_IPV4_CIDR="$(config_read_value "${BOX_CONFIG_FILE}" "network" "tailnet_ipv4_cidr" || printf '%s' "${BOX_TAILNET_IPV4_CIDR}")"
   BOX_TAILNET_IPV6_CIDR="$(config_read_value "${BOX_CONFIG_FILE}" "network" "tailnet_ipv6_cidr" || printf '%s' "${BOX_TAILNET_IPV6_CIDR}")"
   BOX_TAILSCALE_DNS_RESOLVER="$(config_read_value "${BOX_CONFIG_FILE}" "network" "tailscale_dns_resolver" || printf '%s' "${BOX_TAILSCALE_DNS_RESOLVER}")"
   BOX_TAILSCALE_FWMARK="$(config_read_value "${BOX_CONFIG_FILE}" "network" "tailscale_fwmark" || printf '%s' "${BOX_TAILSCALE_FWMARK}")"
   BOX_TAILSCALE_ROUTE_TABLE="$(config_read_value "${BOX_CONFIG_FILE}" "network" "tailscale_route_table" || printf '%s' "${BOX_TAILSCALE_ROUTE_TABLE}")"
+  mapfile -t BOX_CAMPUS_DNS_SUFFIXES < <(config_read_array "${BOX_CONFIG_FILE}" "network" "campus_dns_suffixes" || printf '%s\n' "${BOX_CAMPUS_DNS_SUFFIXES[@]}")
+  mapfile -t BOX_CAMPUS_DNS_PROBE_HOSTS < <(config_read_array "${BOX_CONFIG_FILE}" "network" "campus_dns_probe_hosts" || printf '%s\n' "${BOX_CAMPUS_DNS_PROBE_HOSTS[@]}")
+  mapfile -t BOX_CAMPUS_DNS_PUBLIC_SERVERS < <(config_read_array "${BOX_CONFIG_FILE}" "network" "campus_dns_public_servers" || printf '%s\n' "${BOX_CAMPUS_DNS_PUBLIC_SERVERS[@]}")
 
   BOX_FIREWALL_BACKEND="$(config_read_value "${BOX_CONFIG_FILE}" "firewall" "backend" || printf '%s' "${BOX_FIREWALL_BACKEND}")"
   BOX_ROUTE_TABLE="$(config_read_value "${BOX_CONFIG_FILE}" "firewall" "route_table" || printf '%s' "${BOX_ROUTE_TABLE}")"
@@ -788,7 +809,7 @@ load_config() {
   fi
 
   export BOX_CONFIG_FILE BOX_CONFIG_SOURCE
-  export BOX_CORE BOX_NETWORK_MODE BOX_TPROXY_PORT BOX_REDIR_PORT BOX_DNS_PORT BOX_DNS_HIJACK_MODE BOX_DNS_ENHANCED_MODE BOX_DNS_COEXIST_MODE BOX_IPV6_ENABLED
+  export BOX_CORE BOX_NETWORK_MODE BOX_TPROXY_PORT BOX_REDIR_PORT BOX_DNS_PORT BOX_DNS_HIJACK_MODE BOX_DNS_ENHANCED_MODE BOX_DNS_COEXIST_MODE BOX_IPV6_ENABLED BOX_CAMPUS_DNS_MODE
   export BOX_TAILSCALE_IFACE BOX_TAILNET_IPV4_CIDR BOX_TAILNET_IPV6_CIDR BOX_TAILSCALE_DNS_RESOLVER BOX_TAILSCALE_FWMARK BOX_TAILSCALE_ROUTE_TABLE
   export BOX_FIREWALL_BACKEND BOX_ROUTE_TABLE BOX_ROUTE_PREF BOX_FWMARK BOX_BYPASS_PRIVATE_IP BOX_BYPASS_CN_IP BOX_BYPASS_CN_FILE
   export BOX_POLICY_ENABLED BOX_POLICY_PROXY_MODE BOX_POLICY_DEBOUNCE_SECONDS BOX_POLICY_USE_MODULE_ON_WIFI_DISCONNECT BOX_POLICY_DISABLE_MARKER

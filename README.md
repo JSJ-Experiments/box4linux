@@ -34,6 +34,7 @@ Android reference artifacts are kept untouched in `box-reference/`.
    - `./cmd/boxctl firewall dry-run`
 4. Run integration checks:
    - `./tests/integration/test_phase2.sh`
+   - `./tests/integration/test_campus_dns.sh`
    - `./tests/integration/test_policy.sh`
    - `./tests/integration/test_updater.sh`
    - `sudo ./tests/integration/test_real_kernel.sh`
@@ -256,6 +257,10 @@ On tags (`v*`):
 - IPv6 and DNS controls:
   - `network.ipv6 = true|false` controls whether Mihomo and its DNS answer IPv6 at all
   - `network.dns_enhanced_mode = "fake-ip" | "redir-host"` controls Mihomo DNS behavior
+  - `network.campus_dns_mode = "auto" | "campus" | "public"` controls how campus suffixes resolve
+  - `network.campus_dns_suffixes` lists the suffixes that should follow campus/public split DNS logic
+  - `network.campus_dns_probe_hosts` lists the hosts used to decide whether the current network is returning internal campus addresses
+  - `network.campus_dns_public_servers` lists the DoH resolvers used for those suffixes when the current network is not returning internal campus addresses
   - effective IPv6 behavior today is:
     - `mode = "tun"` and `ipv6 = true`: IPv6 is proxied by the core TUN stack
     - `mode != "tun"` and `ipv6 = true`: IPv6 stays direct outside the Linux firewall graph
@@ -290,6 +295,10 @@ On tags (`v*`):
 - `boxctl firewall status --json` reports the same IPv6/DNS fields plus backend capability flags.
 - If `dns_enhanced_mode = "fake-ip"`, local name resolution can return fake-IP ranges such as `198.18.0.0/16` while browser/devtools still show the real remote server address used by Mihomo's outbound connection.
 - There is no reference-backed `prefer_ipv4|prefer_ipv6|default` selector. The supported family control is `network.ipv6 = true|false`.
+- Campus suffix handling is adaptive rather than pinned:
+  - in `campus_dns_mode = "auto"`, Box inspects the active default-route interface, reads its live DNS servers, and probes the configured campus hosts
+  - if those probes resolve to RFC1918 addresses, configured suffixes such as `+.bit.edu.cn` render to the current link DNS servers
+  - otherwise those suffixes render to the configured DoH resolvers so the same suffixes still work off campus without hardcoding a campus resolver IP
 
 ## Rollback/Uninstall
 

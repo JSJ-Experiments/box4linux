@@ -25,11 +25,19 @@ export MOCK_NFT_STATE="${TMP_DIR}/mock/nft.state"
 export BOX_IPTABLES_CMD="${MOCK_DIR}/iptables"
 export BOX_IP_CMD="${MOCK_DIR}/ip"
 export BOX_NFT_CMD="${MOCK_DIR}/nft"
+export BOX_RESOLVECTL_CMD="${MOCK_DIR}/resolvectl"
+export BOX_DIG_CMD="${MOCK_DIR}/dig"
 export BOX_UNSAFE_SKIP_ROOT_CHECK=1
 export BOX_CAP_TPROXY=1
 export BOX_RUN_DIR="${TMP_DIR}/run"
 export BOX_VAR_DIR="${TMP_DIR}/var"
 export BOX_LOG_DIR="${TMP_DIR}/log"
+export MOCK_IP_DEFAULT_ROUTE_LINE="default via 10.0.32.1 dev wlan0 proto dhcp src 10.0.32.100 metric 100"
+export MOCK_RESOLVECTL_DEFAULT_IFACE="wlan0"
+export MOCK_RESOLVECTL_DEFAULT_DNS="10.0.32.32 10.0.32.33"
+export MOCK_DIG_PRIVATE_HOSTS="lexue.bit.edu.cn xk.bit.edu.cn"
+export MOCK_DIG_PRIVATE_ANSWER="10.0.9.95"
+export MOCK_DIG_PUBLIC_ANSWER="211.68.9.205"
 
 mkdir -p "${TMP_DIR}/mock" "${TMP_DIR}/profiles" "${BOX_RUN_DIR}" "${BOX_VAR_DIR}" "${BOX_LOG_DIR}"
 touch "${MOCK_IPTABLES_STATE}" "${MOCK_IP_STATE}" "${MOCK_NFT_STATE}"
@@ -589,11 +597,30 @@ if grep -Fq '"+.tailscale.com"' "${BOX_RUN_DIR}/rendered/mihomo/config.yaml"; th
 fi
 must_run service stop >/dev/null
 
-printf '[15/15] tun mode reports proxied ipv6 intent\n'
+printf '[15/17] tun mode reports proxied ipv6 intent\n'
 write_config "mihomo" "tun" "disable" "${MIHOMO_SOURCE}" "preserve_tailnet" "100" "iptables"
 must_run service start >/dev/null
 service_json="$(must_run service status --json)"
 assert_contains "${service_json}" "\"ipv6_effective_mode\":\"proxied\""
+must_run service stop >/dev/null
+
+printf '[16/17] campus dns auto renders live campus resolvers for bit domains\n'
+export MOCK_DIG_PRIVATE_HOSTS="lexue.bit.edu.cn xk.bit.edu.cn"
+write_config "mihomo" "mixed" "redirect" "${MIHOMO_SOURCE}" "preserve_tailnet" "100" "iptables"
+must_run service start >/dev/null
+assert_file_contains "${BOX_RUN_DIR}/rendered/mihomo/config.yaml" '    "+.bit.edu.cn":'
+assert_file_contains "${BOX_RUN_DIR}/rendered/mihomo/config.yaml" '      - 10.0.32.32'
+assert_file_contains "${BOX_RUN_DIR}/rendered/mihomo/config.yaml" '      - 10.0.32.33'
+must_run service stop >/dev/null
+
+printf '[17/17] public dns auto renders doh for bit domains off campus\n'
+export MOCK_DIG_PRIVATE_HOSTS=""
+write_config "mihomo" "mixed" "redirect" "${MIHOMO_SOURCE}" "preserve_tailnet" "100" "iptables"
+must_run service start >/dev/null
+assert_file_contains "${BOX_RUN_DIR}/rendered/mihomo/config.yaml" '    "+.bit.edu.cn":'
+assert_file_contains "${BOX_RUN_DIR}/rendered/mihomo/config.yaml" '      - https://dns.alidns.com/dns-query'
+assert_file_contains "${BOX_RUN_DIR}/rendered/mihomo/config.yaml" '      - https://cloudflare-dns.com/dns-query'
+assert_file_contains "${BOX_RUN_DIR}/rendered/mihomo/config.yaml" '      - https://dns.google/dns-query'
 must_run service stop >/dev/null
 
 printf 'PASS: integration phase2 checks completed\n'

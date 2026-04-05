@@ -1,0 +1,38 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+server=""
+host=""
+
+for arg in "$@"; do
+  case "${arg}" in
+    @*)
+      server="${arg#@}"
+      ;;
+    +*|-*)
+      ;;
+    A|AAAA|CNAME)
+      ;;
+    *)
+      host="${arg}"
+      ;;
+  esac
+done
+
+private_hosts="${MOCK_DIG_PRIVATE_HOSTS:-}"
+private_answer="${MOCK_DIG_PRIVATE_ANSWER:-10.0.9.95}"
+public_answer="${MOCK_DIG_PUBLIC_ANSWER:-211.68.9.205}"
+
+if [[ -z "${host}" ]]; then
+  exit 0
+fi
+
+for candidate in ${private_hosts}; do
+  if [[ "${host}" == "${candidate}" ]]; then
+    printf '%s\n' "${private_answer}"
+    exit 0
+  fi
+done
+
+printf '%s\n' "${public_answer}"

@@ -194,6 +194,188 @@ yaml_mihomo_ensure_dns_fake_ip_filter_item() {
   mv "${tmp_file}" "${file}"
 }
 
+yaml_mihomo_set_dns_policy_servers() {
+  local file="${1:?missing file}"
+  local key="${2:?missing key}"
+  local anchor_key="${3:-}"
+  shift 3 || true
+  local tmp_file
+  tmp_file="$(mktemp)"
+
+  awk -v key="${key}" -v anchor_key="${anchor_key}" -v servers="$*" '
+    function print_block() {
+      local_count = split(servers, entries, " ")
+      print "    \"" key "\":"
+      for (i = 1; i <= local_count; i++) {
+        if (entries[i] != "") {
+          print "      - " entries[i]
+        }
+      }
+    }
+
+    BEGIN {
+      in_policy = 0
+      replaced = 0
+      skipping = 0
+      saw_policy = 0
+    }
+
+    {
+      line = $0
+
+      if (line ~ /^  nameserver-policy:[[:space:]]*$/) {
+        saw_policy = 1
+        in_policy = 1
+        print line
+        next
+      }
+
+      if (in_policy && line ~ /^  [^[:space:]][^:]*:[[:space:]]*$/) {
+        if (!replaced) {
+          print_block()
+          replaced = 1
+        }
+        in_policy = 0
+      }
+
+      if (in_policy && line == ("    \"" key "\":")) {
+        if (!replaced) {
+          print_block()
+          replaced = 1
+        }
+        skipping = 1
+        next
+      }
+
+      if (in_policy && !replaced && anchor_key != "" && line == ("    \"" anchor_key "\":")) {
+        print_block()
+        replaced = 1
+      }
+
+      if (in_policy && skipping) {
+        if (line ~ /^      - /) {
+          next
+        }
+        skipping = 0
+      }
+
+      print line
+    }
+
+    END {
+      if (in_policy && !replaced) {
+        print_block()
+      } else if (!saw_policy) {
+        print "dns:"
+        print "  nameserver-policy:"
+        print_block()
+      }
+    }
+  ' "${file}" >"${tmp_file}"
+
+  mv "${tmp_file}" "${file}"
+}
+
+is_private_ipv4() {
+  local ip="${1:-}"
+  [[ "${ip}" =~ ^10\. ]] && return 0
+  [[ "${ip}" =~ ^192\.168\. ]] && return 0
+  if [[ "${ip}" =~ ^172\.([0-9]+)\. ]]; then
+    local second="${BASH_REMATCH[1]}"
+    (( second >= 16 && second <= 31 )) && return 0
+  fi
+  return 1
+}
+
+mihomo_active_default_iface() {
+  local ip_cmd="${BOX_IP_CMD:-ip}"
+  command -v "${ip_cmd}" >/dev/null 2>&1 || return 1
+  "${ip_cmd}" route show default 2>/dev/null | awk '/^default / { for (i = 1; i <= NF; i++) if ($i == "dev" && (i + 1) <= NF) { print $(i + 1); exit } }'
+}
+
+mihomo_active_link_dns_servers() {
+  local iface="${1:-}"
+  local resolvectl_cmd="${BOX_RESOLVECTL_CMD:-resolvectl}"
+  [[ -n "${iface}" ]] || return 1
+  command -v "${resolvectl_cmd}" >/dev/null 2>&1 || return 1
+  "${resolvectl_cmd}" dns "${iface}" 2>/dev/null | awk '
+    {
+      for (i = 1; i <= NF; i++) {
+        if ($i ~ /^([0-9]{1,3}\.){3}[0-9]{1,3}$/) {
+          print $i
+        }
+      }
+    }
+  '
+}
+
+mihomo_probe_host_via_dns() {
+  local server="${1:-}"
+  local host="${2:-}"
+  local dig_cmd="${BOX_DIG_CMD:-dig}"
+  [[ -n "${server}" && -n "${host}" ]] || return 1
+  command -v "${dig_cmd}" >/dev/null 2>&1 || return 1
+  "${dig_cmd}" +time=3 +tries=1 +short @"${server}" "${host}" A 2>/dev/null | awk 'NF { print; exit }'
+}
+
+mihomo_detect_campus_dns_mode() {
+  local iface dns_server probe_host answer
+
+  case "${BOX_CAMPUS_DNS_MODE}" in
+    campus|public)
+      printf '%s\n' "${BOX_CAMPUS_DNS_MODE}"
+      return 0
+      ;;
+  esac
+
+  iface="$(mihomo_active_default_iface || true)"
+  mapfile -t dns_servers < <(mihomo_active_link_dns_servers "${iface}" || true)
+  if [[ "${#dns_servers[@]}" -eq 0 ]]; then
+    printf 'public\n'
+    return 0
+  fi
+
+  for probe_host in "${BOX_CAMPUS_DNS_PROBE_HOSTS[@]}"; do
+    [[ -n "${probe_host}" ]] || continue
+    for dns_server in "${dns_servers[@]}"; do
+      answer="$(mihomo_probe_host_via_dns "${dns_server}" "${probe_host}" || true)"
+      if [[ -n "${answer}" ]] && is_private_ipv4 "${answer}"; then
+        printf 'campus\n'
+        return 0
+      fi
+    done
+  done
+
+  printf 'public\n'
+}
+
+mutator_mihomo_apply_campus_dns_policy() {
+  local rendered_file="${1:?missing rendered file}"
+  local active_mode iface
+  active_mode="$(mihomo_detect_campus_dns_mode)"
+
+  if [[ "${#BOX_CAMPUS_DNS_SUFFIXES[@]}" -eq 0 ]]; then
+    return 0
+  fi
+
+  if [[ "${active_mode}" == "campus" ]]; then
+    iface="$(mihomo_active_default_iface || true)"
+    mapfile -t dns_servers < <(mihomo_active_link_dns_servers "${iface}" || true)
+    [[ "${#dns_servers[@]}" -gt 0 ]] || return 0
+    local suffix
+    for suffix in "${BOX_CAMPUS_DNS_SUFFIXES[@]}"; do
+      [[ -n "${suffix}" ]] || continue
+      yaml_mihomo_set_dns_policy_servers "${rendered_file}" "${suffix}" "+.edu.cn" "${dns_servers[@]}"
+    done
+  else
+    local suffix
+    for suffix in "${BOX_CAMPUS_DNS_SUFFIXES[@]}"; do
+      [[ -n "${suffix}" ]] || continue
+      yaml_mihomo_set_dns_policy_servers "${rendered_file}" "${suffix}" "+.edu.cn" "${BOX_CAMPUS_DNS_PUBLIC_SERVERS[@]}"
+    done
+  fi
+}
+
 mutator_mihomo_render_overlay() {
   local source_file="${1:?missing source file}"
   local rendered_file="${2:?missing rendered file}"
@@ -241,6 +423,8 @@ EOF
     yaml_mihomo_ensure_dns_fake_ip_filter_item "${rendered_file}" "+.tailscale.com"
     yaml_mihomo_ensure_dns_fake_ip_filter_item "${rendered_file}" "+.ts.net"
   fi
+
+  mutator_mihomo_apply_campus_dns_policy "${rendered_file}"
 
   {
     printf '# box overlay (runtime only)\n'
