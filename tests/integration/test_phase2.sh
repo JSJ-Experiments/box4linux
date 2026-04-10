@@ -77,6 +77,7 @@ write_config() {
   local firewall_extra="${8:-}"
   local dns_enhanced_mode="${9:-fake-ip}"
   local ipv6_enabled="${10:-true}"
+  local network_extra="${11:-}"
   cat >"${CONFIG_FILE}" <<EOF
 [core]
 selected = "${core}"
@@ -99,6 +100,7 @@ tailnet_ipv6_cidr = "fd7a:115c:a1e0::/48"
 tailscale_dns_resolver = "100.100.100.100"
 tailscale_fwmark = "0x80000/0xff0000"
 tailscale_route_table = 52
+${network_extra}
 
 [firewall]
 backend = "${backend}"
@@ -288,6 +290,28 @@ assert_nft_tailscale_bypass_rules() {
   fi
 }
 
+assert_org_dns_bypass_rules() {
+  if ! grep -Fq 'RULE|mangle|BOX_DNS_MANGLE|-d 10.0.32.32 -p udp --dport 53 -j RETURN' "${MOCK_IPTABLES_STATE}" || \
+     ! grep -Fq 'RULE|mangle|BOX_DNS_MANGLE|-d 10.0.32.33 -p udp --dport 53 -j RETURN' "${MOCK_IPTABLES_STATE}" || \
+     ! grep -Fq 'RULE|nat|BOX_DNS_NAT|-d 10.0.32.32 -p udp --dport 53 -j RETURN' "${MOCK_IPTABLES_STATE}" || \
+     ! grep -Fq 'RULE|nat|BOX_DNS_NAT|-d 10.0.32.33 -p udp --dport 53 -j RETURN' "${MOCK_IPTABLES_STATE}"; then
+    printf 'ASSERT ORG DNS FAILED: campus dns bypass missing\n' >&2
+    cat "${MOCK_IPTABLES_STATE}" >&2
+    exit 1
+  fi
+}
+
+assert_nft_org_dns_bypass_rules() {
+  if ! grep -Fq 'RULE|inet|box_mangle|box_dns|ip daddr 10.0.32.32 udp dport 53 return' "${MOCK_NFT_STATE}" || \
+     ! grep -Fq 'RULE|inet|box_mangle|box_dns|ip daddr 10.0.32.33 udp dport 53 return' "${MOCK_NFT_STATE}" || \
+     ! grep -Fq 'RULE|ip|box_nat|box_dns|ip daddr 10.0.32.32 udp dport 53 return' "${MOCK_NFT_STATE}" || \
+     ! grep -Fq 'RULE|ip|box_nat|box_dns|ip daddr 10.0.32.33 udp dport 53 return' "${MOCK_NFT_STATE}"; then
+    printf 'ASSERT NFT ORG DNS FAILED: campus dns bypass missing\n' >&2
+    cat "${MOCK_NFT_STATE}" >&2
+    exit 1
+  fi
+}
+
 assert_no_tailscale_bypass_rules() {
   if grep -Fq 'RULE|mangle|BOX_MANGLE|-i tailscale0 -j RETURN' "${MOCK_IPTABLES_STATE}" || \
     grep -Fq 'RULE|mangle|BOX_MANGLE|-m mark --mark 0x80000/0xff0000 -j RETURN' "${MOCK_IPTABLES_STATE}" || \
@@ -351,8 +375,10 @@ run_firewall_mode_case() {
   if [[ "${coexist_mode}" == "preserve_tailnet" && "${backend}" == "iptables" ]]; then
     assert_tailscale_bypass_rules
     assert_magicdns_bypass_rules
+    assert_org_dns_bypass_rules
   elif [[ "${coexist_mode}" == "preserve_tailnet" && "${backend}" == "nftables" ]]; then
     assert_nft_tailscale_bypass_rules
+    assert_nft_org_dns_bypass_rules
   elif [[ "${backend}" == "iptables" ]]; then
     assert_no_tailscale_bypass_rules
   else
@@ -399,25 +425,152 @@ run_firewall_mode_case() {
   assert_no_box_artifacts
 }
 
-printf '[1/13] firewall mode/dns apply+renew+disable idempotency (preserve_tailnet)\n'
+run_org_dns_iface_detection_case() {
+  local backend="${1:?missing backend}"
+  local status_json
+  local dns_map_file="${TMP_DIR}/org-dns-map.txt"
+  local dig_responses_file="${TMP_DIR}/org-dig-responses.txt"
+
+  cat >"${dns_map_file}" <<'EOF'
+enp2s0 10.0.0.10 10.0.0.9
+wlan0 10.0.32.32 10.0.32.33
+EOF
+
+  cat >"${dig_responses_file}" <<'EOF'
+10.0.0.10 lexue.bit.edu.cn 211.68.9.205
+10.0.0.9 lexue.bit.edu.cn 211.68.9.205
+10.0.0.10 xk.bit.edu.cn 211.68.9.205
+10.0.0.9 xk.bit.edu.cn 211.68.9.205
+10.0.32.32 lexue.bit.edu.cn 10.0.9.95
+10.0.32.33 lexue.bit.edu.cn 10.0.9.95
+10.0.32.32 xk.bit.edu.cn 10.0.8.88
+10.0.32.33 xk.bit.edu.cn 10.0.8.88
+EOF
+
+  : >"${MOCK_IPTABLES_STATE}"
+  : >"${MOCK_NFT_STATE}"
+  export MOCK_IP_DEFAULT_ROUTE_LINE="default via 10.0.0.1 dev enp2s0 proto dhcp src 10.0.0.2 metric 100"
+  export MOCK_RESOLVECTL_DEFAULT_IFACE="enp2s0"
+  export MOCK_RESOLVECTL_DEFAULT_DNS="10.0.0.10 10.0.0.9"
+  export MOCK_RESOLVECTL_DNS_MAP_FILE="${dns_map_file}"
+  export MOCK_DIG_RESPONSES_FILE="${dig_responses_file}"
+
+  write_config "mihomo" "tproxy" "tproxy" "${MIHOMO_SOURCE}" "preserve_tailnet" "100" "${backend}"
+  seed_tailscale_state
+  must_run firewall enable >/dev/null
+
+  status_json="$(must_run firewall status --json)"
+  assert_contains "${status_json}" "\"org_dns_mode_active\":\"org\""
+  assert_contains "${status_json}" "\"org_dns_iface\":\"wlan0\""
+
+  if [[ "${backend}" == "iptables" ]]; then
+    assert_org_dns_bypass_rules
+  else
+    assert_nft_org_dns_bypass_rules
+  fi
+
+  must_run firewall disable >/dev/null
+  assert_tailscale_state_preserved
+  assert_no_box_artifacts
+  unset MOCK_RESOLVECTL_DNS_MAP_FILE
+  unset MOCK_DIG_RESPONSES_FILE
+  export MOCK_IP_DEFAULT_ROUTE_LINE="default via 10.0.32.1 dev wlan0 proto dhcp src 10.0.32.100 metric 100"
+  export MOCK_RESOLVECTL_DEFAULT_IFACE="wlan0"
+  export MOCK_RESOLVECTL_DEFAULT_DNS="10.0.32.32 10.0.32.33"
+}
+
+run_org_dns_default_route_tiebreak_case() {
+  local backend="${1:?missing backend}"
+  local status_json
+  local dns_map_file="${TMP_DIR}/org-dns-tie-map.txt"
+  local dig_responses_file="${TMP_DIR}/org-dns-tie-responses.txt"
+
+  cat >"${dns_map_file}" <<'EOF'
+enp2s0 10.0.0.10 10.0.0.9
+wlan0 10.0.32.32 10.0.32.33
+EOF
+
+  cat >"${dig_responses_file}" <<'EOF'
+10.0.0.10 lexue.bit.edu.cn 10.0.9.95
+10.0.0.9 lexue.bit.edu.cn 10.0.9.95
+10.0.0.10 xk.bit.edu.cn 10.0.2.21
+10.0.0.9 xk.bit.edu.cn 10.0.2.21
+10.0.32.32 lexue.bit.edu.cn 10.0.9.95
+10.0.32.33 lexue.bit.edu.cn 10.0.9.95
+10.0.32.32 xk.bit.edu.cn 10.0.8.88
+10.0.32.33 xk.bit.edu.cn 10.0.8.88
+EOF
+
+  : >"${MOCK_IPTABLES_STATE}"
+  : >"${MOCK_NFT_STATE}"
+  export MOCK_IP_DEFAULT_ROUTE_LINE="default via 10.0.0.1 dev enp2s0 proto dhcp src 10.0.0.2 metric 100"
+  export MOCK_RESOLVECTL_DEFAULT_IFACE="enp2s0"
+  export MOCK_RESOLVECTL_DEFAULT_DNS="10.0.0.10 10.0.0.9"
+  export MOCK_RESOLVECTL_DNS_MAP_FILE="${dns_map_file}"
+  export MOCK_DIG_RESPONSES_FILE="${dig_responses_file}"
+
+  write_config "mihomo" "tproxy" "tproxy" "${MIHOMO_SOURCE}" "preserve_tailnet" "100" "${backend}"
+  seed_tailscale_state
+  must_run firewall enable >/dev/null
+
+  status_json="$(must_run firewall status --json)"
+  assert_contains "${status_json}" "\"org_dns_mode_active\":\"org\""
+  assert_contains "${status_json}" "\"org_dns_iface\":\"enp2s0\""
+  assert_contains "${status_json}" "\"org_dns_servers\":[\"10.0.0.10\",\"10.0.0.9\"]"
+
+  must_run firewall disable >/dev/null
+  assert_tailscale_state_preserved
+  assert_no_box_artifacts
+  unset MOCK_RESOLVECTL_DNS_MAP_FILE
+  unset MOCK_DIG_RESPONSES_FILE
+  export MOCK_IP_DEFAULT_ROUTE_LINE="default via 10.0.32.1 dev wlan0 proto dhcp src 10.0.32.100 metric 100"
+  export MOCK_RESOLVECTL_DEFAULT_IFACE="wlan0"
+  export MOCK_RESOLVECTL_DEFAULT_DNS="10.0.32.32 10.0.32.33"
+}
+
+run_service_survives_session_exit_case() {
+  local core="${1:?missing core}"
+  local source="${2:?missing source}"
+  local rendered_path
+
+  write_config "${core}" "mixed" "redirect" "${source}" "preserve_tailnet" "100" "iptables"
+  seed_tailscale_state
+  script -q -c "\"${BOXCTL}\" service start >/dev/null 2>&1" /dev/null
+  sleep 1
+
+  if [[ "${core}" == "mihomo" ]]; then
+    rendered_path="${BOX_RUN_DIR}/rendered/mihomo/config.yaml"
+  else
+    rendered_path="${BOX_RUN_DIR}/rendered/sing-box/config.json"
+  fi
+
+  service_json="$(must_run service status --json)"
+  assert_contains "${service_json}" "\"status\":\"healthy\""
+  assert_contains "${service_json}" "\"rendered_config\":\"${rendered_path}\""
+  must_run service stop >/dev/null
+  assert_tailscale_state_preserved
+  assert_no_box_artifacts
+}
+
+printf '[1/20] firewall mode/dns apply+renew+disable idempotency (preserve_tailnet)\n'
 run_firewall_mode_case "tun" "disable" "preserve_tailnet" "100" "iptables"
 run_firewall_mode_case "tproxy" "tproxy" "preserve_tailnet" "100" "iptables"
 run_firewall_mode_case "redirect" "redirect" "preserve_tailnet" "100" "iptables"
 run_firewall_mode_case "mixed" "tproxy" "preserve_tailnet" "100" "iptables"
 run_firewall_mode_case "enhance" "redirect" "preserve_tailnet" "100" "iptables"
 
-printf '[2/13] nftables backend mode/dns apply+renew+disable idempotency (preserve_tailnet)\n'
+printf '[2/20] nftables backend mode/dns apply+renew+disable idempotency (preserve_tailnet)\n'
 run_firewall_mode_case "tun" "disable" "preserve_tailnet" "100" "nftables"
 run_firewall_mode_case "tproxy" "tproxy" "preserve_tailnet" "100" "nftables"
 run_firewall_mode_case "redirect" "redirect" "preserve_tailnet" "100" "nftables"
 run_firewall_mode_case "mixed" "tproxy" "preserve_tailnet" "100" "nftables"
 run_firewall_mode_case "enhance" "redirect" "preserve_tailnet" "100" "nftables"
 
-printf '[3/13] coexist mode strict_box rule differences\n'
+printf '[3/20] coexist mode strict_box rule differences\n'
 run_firewall_mode_case "tproxy" "tproxy" "strict_box" "100" "iptables"
 run_firewall_mode_case "tproxy" "tproxy" "strict_box" "100" "nftables"
 
-printf '[4/13] route_pref convergence across renew\n'
+printf '[4/20] route_pref convergence across renew\n'
 write_config "mihomo" "tproxy" "tproxy" "${MIHOMO_SOURCE}" "preserve_tailnet" "100" "iptables"
 seed_tailscale_state
 must_run firewall enable >/dev/null
@@ -429,7 +582,15 @@ must_run firewall disable >/dev/null
 assert_tailscale_state_preserved
 assert_no_box_artifacts
 
-printf '[5/13] firewall dry-run surfaces intended operations\n'
+printf '[5/20] org dns detection prefers campus resolver link over default route\n'
+run_org_dns_iface_detection_case "iptables"
+run_org_dns_iface_detection_case "nftables"
+
+printf '[6/20] org dns detection breaks ties with the default route\n'
+run_org_dns_default_route_tiebreak_case "iptables"
+run_org_dns_default_route_tiebreak_case "nftables"
+
+printf '[7/20] firewall dry-run surfaces intended operations\n'
 cn_bypass_file="${TMP_DIR}/china_ipv4.txt"
 cat >"${cn_bypass_file}" <<'EOF_CN'
 1.1.0.0/16
@@ -456,7 +617,7 @@ assert_line_order "${dryrun_output}" "add rule ip box_nat output meta skuid 0 ip
 assert_line_order "${dryrun_output}" "add rule inet box_mangle output meta skuid 0 jump box_dns" "add rule inet box_mangle output meta skuid 0 return"
 assert_line_order "${dryrun_output}" "add rule ip box_nat output meta skuid 0 jump box_dns" "add rule ip box_nat output meta skuid 0 return"
 
-printf '[6/13] trace mode logs external commands with action context\n'
+printf '[8/20] trace mode logs external commands with action context\n'
 BOX_TRACE_COMMANDS=1
 export BOX_TRACE_COMMANDS
 trace_output="$(must_run firewall status --json)"
@@ -465,7 +626,7 @@ assert_contains "${trace_output}" "event_id=TRACE_CMD"
 assert_contains "${trace_output}" "action=status"
 assert_contains "${trace_output}" "cmd="
 
-printf '[7/13] explicit BOX_CONFIG_FILE missing fails fast\n'
+printf '[9/20] explicit BOX_CONFIG_FILE missing fails fast\n'
 missing_cfg="${TMP_DIR}/missing-explicit-box.toml"
 BOX_CONFIG_FILE="${missing_cfg}"
 export BOX_CONFIG_FILE
@@ -474,7 +635,7 @@ assert_contains "${fail_output}" "explicit BOX_CONFIG_FILE does not exist"
 BOX_CONFIG_FILE="${CONFIG_FILE}"
 export BOX_CONFIG_FILE
 
-printf '[8/13] status json conditional error field\n'
+printf '[10/20] status json conditional error field\n'
 write_config "mihomo" "tun" "disable" "${MIHOMO_SOURCE}" "preserve_tailnet" "100" "iptables"
 saved_iptables_cmd="${BOX_IPTABLES_CMD}"
 BOX_IPTABLES_CMD="${TMP_DIR}/missing-iptables"
@@ -485,7 +646,7 @@ assert_contains "${error_status_json}" "\"error\":\"iptables inspection unavaila
 BOX_IPTABLES_CMD="${saved_iptables_cmd}"
 export BOX_IPTABLES_CMD
 
-printf '[9/13] kernel bypass rules apply in iptables backend\n'
+printf '[11/20] kernel bypass rules apply in iptables backend\n'
 write_config "mihomo" "mixed" "redirect" "${MIHOMO_SOURCE}" "preserve_tailnet" "100" "iptables" \
 "bypass_private_ip = true
 bypass_cn_ip = true
@@ -503,7 +664,7 @@ assert_contains "${status_json}" "\"bypass_cn_file\":\"${cn_bypass_file}\""
 must_run firewall disable >/dev/null
 assert_no_box_artifacts
 
-printf '[10/13] service status side-effect free\n'
+printf '[12/20] service status side-effect free\n'
 write_config "mihomo" "tun" "disable" "${MIHOMO_SOURCE}" "preserve_tailnet" "100" "iptables"
 rm -rf "${BOX_RUN_DIR}/rendered"
 must_run service status --json >/dev/null
@@ -512,7 +673,7 @@ if [[ -d "${BOX_RUN_DIR}/rendered" ]]; then
   exit 1
 fi
 
-printf '[11/15] service lifecycle + mihomo overlay\n'
+printf '[13/20] service lifecycle + mihomo overlay\n'
 write_config "mihomo" "mixed" "redirect" "${MIHOMO_SOURCE}" "preserve_tailnet" "100" "iptables"
 seed_tailscale_state
 mihomo_checksum_before="$(sha256sum "${MIHOMO_SOURCE}" | awk '{print $1}')"
@@ -556,7 +717,11 @@ assert_tailscale_state_preserved
 service_json="$(must_run service status --json)"
 assert_contains "${service_json}" "\"status\":\"stopped\""
 
-printf '[12/15] strict_box mihomo overlay omits tailscale fake-ip filter bypass\n'
+printf '[14/20] service survives parent session exit\n'
+run_service_survives_session_exit_case "mihomo" "${MIHOMO_SOURCE}"
+run_service_survives_session_exit_case "sing-box" "${SING_SOURCE}"
+
+printf '[15/20] strict_box mihomo overlay omits tailscale fake-ip filter bypass\n'
 write_config "mihomo" "mixed" "redirect" "${MIHOMO_SOURCE}" "strict_box" "100" "iptables"
 must_run service start >/dev/null
 assert_file_exists "${BOX_RUN_DIR}/rendered/mihomo/config.yaml"
@@ -567,7 +732,7 @@ if grep -Fq '"+.tailscale.com"' "${BOX_RUN_DIR}/rendered/mihomo/config.yaml" || 
 fi
 must_run service stop >/dev/null
 
-printf '[13/15] service lifecycle + sing-box overlay\n'
+printf '[16/20] service lifecycle + sing-box overlay\n'
 write_config "sing-box" "tproxy" "tproxy" "${SING_SOURCE}" "preserve_tailnet" "100" "iptables"
 seed_tailscale_state
 sing_checksum_before="$(sha256sum "${SING_SOURCE}" | awk '{print $1}')"
@@ -586,7 +751,7 @@ must_run service stop >/dev/null
 assert_tailscale_state_preserved
 assert_no_box_artifacts
 
-printf '[14/15] mihomo overlay honors ipv6 disable and redir-host\n'
+printf '[17/20] mihomo overlay honors ipv6 disable and redir-host\n'
 write_config "mihomo" "mixed" "redirect" "${MIHOMO_SOURCE}" "preserve_tailnet" "100" "iptables" "" \
 "redir-host" "false"
 must_run service start >/dev/null
@@ -603,30 +768,56 @@ if grep -Fq '"+.tailscale.com"' "${BOX_RUN_DIR}/rendered/mihomo/config.yaml"; th
 fi
 must_run service stop >/dev/null
 
-printf '[15/17] tun mode reports proxied ipv6 intent\n'
+printf '[18/20] tun mode reports proxied ipv6 intent\n'
 write_config "mihomo" "tun" "disable" "${MIHOMO_SOURCE}" "preserve_tailnet" "100" "iptables"
 must_run service start >/dev/null
 service_json="$(must_run service status --json)"
 assert_contains "${service_json}" "\"ipv6_effective_mode\":\"proxied\""
 must_run service stop >/dev/null
 
-printf '[16/17] campus dns auto renders live campus resolvers for bit domains\n'
+printf '[19/20] campus dns auto renders live campus resolvers for org domains\n'
 export MOCK_DIG_PRIVATE_HOSTS="lexue.bit.edu.cn xk.bit.edu.cn"
 write_config "mihomo" "mixed" "redirect" "${MIHOMO_SOURCE}" "preserve_tailnet" "100" "iptables"
 must_run service start >/dev/null
 assert_file_contains "${BOX_RUN_DIR}/rendered/mihomo/config.yaml" '    "+.bit.edu.cn":'
 assert_file_contains "${BOX_RUN_DIR}/rendered/mihomo/config.yaml" '      - 10.0.32.32'
 assert_file_contains "${BOX_RUN_DIR}/rendered/mihomo/config.yaml" '      - 10.0.32.33'
+assert_file_contains "${BOX_RUN_DIR}/rendered/mihomo/config.yaml" '    "+.edu.cn":'
 must_run service stop >/dev/null
 
-printf '[17/17] public dns auto renders doh for bit domains off campus\n'
+printf '[20/20] public dns auto removes org suffix override unless opted in\n'
 export MOCK_DIG_PRIVATE_HOSTS=""
 write_config "mihomo" "mixed" "redirect" "${MIHOMO_SOURCE}" "preserve_tailnet" "100" "iptables"
 must_run service start >/dev/null
-assert_file_contains "${BOX_RUN_DIR}/rendered/mihomo/config.yaml" '    "+.bit.edu.cn":'
-assert_file_contains "${BOX_RUN_DIR}/rendered/mihomo/config.yaml" '      - https://dns.alidns.com/dns-query'
-assert_file_contains "${BOX_RUN_DIR}/rendered/mihomo/config.yaml" '      - https://cloudflare-dns.com/dns-query'
-assert_file_contains "${BOX_RUN_DIR}/rendered/mihomo/config.yaml" '      - https://dns.google/dns-query'
+if grep -Fq '    "+.bit.edu.cn":' "${BOX_RUN_DIR}/rendered/mihomo/config.yaml"; then
+  printf 'ASSERT PUBLIC DNS OVERLAY FAILED: org suffix override unexpectedly present\n' >&2
+  cat "${BOX_RUN_DIR}/rendered/mihomo/config.yaml" >&2
+  exit 1
+fi
+if grep -Fq '    "+.edu.cn":' "${BOX_RUN_DIR}/rendered/mihomo/config.yaml"; then
+  printf 'ASSERT PUBLIC DNS OVERLAY FAILED: broad edu.cn override unexpectedly present\n' >&2
+  cat "${BOX_RUN_DIR}/rendered/mihomo/config.yaml" >&2
+  exit 1
+fi
 must_run service stop >/dev/null
+
+export MOCK_DIG_RESPONSES_FILE="${TMP_DIR}/phase2-best-match-dig.txt"
+cat >"${MOCK_DIG_RESPONSES_FILE}" <<'EOF'
+lexue.bit.edu.cn 10.0.9.95
+xk.bit.edu.cn 211.68.9.205
+EOF
+write_config "mihomo" "mixed" "redirect" "${MIHOMO_SOURCE}" "preserve_tailnet" "100" "iptables" "" "fake-ip" "true" \
+"org_dns_suffix_policy = \"best_match\""
+must_run service start >/dev/null
+assert_file_contains "${BOX_RUN_DIR}/rendered/mihomo/config.yaml" '    "+.bit.edu.cn":'
+assert_file_contains "${BOX_RUN_DIR}/rendered/mihomo/config.yaml" '      - 10.0.32.32'
+assert_file_contains "${BOX_RUN_DIR}/rendered/mihomo/config.yaml" '      - 10.0.32.33'
+if grep -Fq '    "+.edu.cn":' "${BOX_RUN_DIR}/rendered/mihomo/config.yaml"; then
+  printf 'ASSERT BEST MATCH OVERLAY FAILED: broad edu.cn override unexpectedly present\n' >&2
+  cat "${BOX_RUN_DIR}/rendered/mihomo/config.yaml" >&2
+  exit 1
+fi
+must_run service stop >/dev/null
+unset MOCK_DIG_RESPONSES_FILE
 
 printf 'PASS: integration phase2 checks completed\n'

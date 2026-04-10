@@ -31,8 +31,7 @@ adapter_sing_box_start() {
   local workdir="${3:?missing workdir}"
   local service_log="${4:?missing service log path}"
 
-  "${bin}" run -c "${rendered_config}" -D "${workdir}" >>"${service_log}" 2>&1 &
-  printf '%s\n' "$!"
+  spawn_detached_process "${service_log}" "${bin}" run -c "${rendered_config}" -D "${workdir}"
 }
 
 adapter_sing_box_reload() {

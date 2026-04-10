@@ -276,6 +276,50 @@ yaml_mihomo_set_dns_policy_servers() {
   mv "${tmp_file}" "${file}"
 }
 
+yaml_mihomo_delete_dns_policy_key() {
+  local file="${1:?missing file}"
+  local key="${2:?missing key}"
+  local tmp_file
+  tmp_file="$(mktemp)"
+
+  awk -v key="${key}" '
+    BEGIN {
+      in_policy = 0
+      skipping = 0
+    }
+
+    {
+      line = $0
+
+      if (line ~ /^  nameserver-policy:[[:space:]]*$/) {
+        in_policy = 1
+        print line
+        next
+      }
+
+      if (in_policy && line ~ /^  [^[:space:]][^:]*:[[:space:]]*$/) {
+        in_policy = 0
+      }
+
+      if (in_policy && line == ("    \"" key "\":")) {
+        skipping = 1
+        next
+      }
+
+      if (in_policy && skipping) {
+        if (line ~ /^      - /) {
+          next
+        }
+        skipping = 0
+      }
+
+      print line
+    }
+  ' "${file}" >"${tmp_file}"
+
+  mv "${tmp_file}" "${file}"
+}
+
 mihomo_active_default_iface() {
   box_active_default_iface
 }
@@ -294,28 +338,54 @@ mihomo_detect_campus_dns_mode() {
 
 mutator_mihomo_apply_campus_dns_policy() {
   local rendered_file="${1:?missing rendered file}"
-  local active_mode iface
+  local active_mode configured_mode suffix_policy iface
+  local -a suffix_dns_servers=() org_dns_servers=()
   active_mode="$(mihomo_detect_campus_dns_mode)"
+  configured_mode="$(box_org_dns_mode_configured)"
+  suffix_policy="$(normalize_org_dns_suffix_policy "${BOX_CAMPUS_DNS_SUFFIX_POLICY}")"
 
   if [[ "${#BOX_CAMPUS_DNS_SUFFIXES[@]}" -eq 0 ]]; then
     return 0
   fi
 
   if [[ "${active_mode}" == "org" ]]; then
-    iface="$(mihomo_active_default_iface || true)"
-    mapfile -t dns_servers < <(mihomo_active_link_dns_servers "${iface}" || true)
-    [[ "${#dns_servers[@]}" -gt 0 ]] || return 0
-    local suffix
+    iface="$(box_org_dns_status_iface || true)"
+    mapfile -t org_dns_servers < <(mihomo_active_link_dns_servers "${iface}" || true)
+  fi
+
+  case "${suffix_policy}" in
+    org_only)
+      suffix_dns_servers=("${org_dns_servers[@]}")
+      ;;
+    best_match)
+      if [[ "${active_mode}" == "org" ]]; then
+        suffix_dns_servers=("${org_dns_servers[@]}")
+      elif [[ "${configured_mode}" != "public" ]]; then
+        iface="$(box_best_org_dns_candidate_iface || true)"
+        if [[ -n "${iface}" ]]; then
+          mapfile -t suffix_dns_servers < <(mihomo_active_link_dns_servers "${iface}" || true)
+        fi
+      fi
+      ;;
+  esac
+
+  local suffix
+  if [[ "${#suffix_dns_servers[@]}" -gt 0 ]]; then
     for suffix in "${BOX_CAMPUS_DNS_SUFFIXES[@]}"; do
       [[ -n "${suffix}" ]] || continue
-      yaml_mihomo_set_dns_policy_servers "${rendered_file}" "${suffix}" "+.edu.cn" "${dns_servers[@]}"
+      yaml_mihomo_set_dns_policy_servers "${rendered_file}" "${suffix}" "" "${suffix_dns_servers[@]}"
     done
   else
-    local suffix
     for suffix in "${BOX_CAMPUS_DNS_SUFFIXES[@]}"; do
       [[ -n "${suffix}" ]] || continue
-      yaml_mihomo_set_dns_policy_servers "${rendered_file}" "${suffix}" "+.edu.cn" "${BOX_CAMPUS_DNS_PUBLIC_SERVERS[@]}"
+      yaml_mihomo_delete_dns_policy_key "${rendered_file}" "${suffix}"
     done
+  fi
+
+  if [[ "${active_mode}" == "org" && "${#org_dns_servers[@]}" -gt 0 ]]; then
+    yaml_mihomo_set_dns_policy_servers "${rendered_file}" "+.edu.cn" "" "${org_dns_servers[@]}"
+  else
+    yaml_mihomo_delete_dns_policy_key "${rendered_file}" "+.edu.cn"
   fi
 }
 

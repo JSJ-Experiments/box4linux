@@ -31,8 +31,7 @@ adapter_mihomo_start() {
   local workdir="${3:?missing workdir}"
   local service_log="${4:?missing service log path}"
 
-  "${bin}" -d "${workdir}" -f "${rendered_config}" >>"${service_log}" 2>&1 &
-  printf '%s\n' "$!"
+  spawn_detached_process "${service_log}" "${bin}" -d "${workdir}" -f "${rendered_config}"
 }
 
 adapter_mihomo_read_value() {

@@ -323,3 +323,15 @@ read_pid_file() {
     tr -d '[:space:]' <"${pid_file}"
   fi
 }
+
+spawn_detached_process() {
+  local log_file="${1:?missing log file}"
+  local pid
+  shift
+  [[ "$#" -gt 0 ]] || return 1
+
+  nohup "$@" >>"${log_file}" 2>&1 </dev/null &
+  pid="$!"
+  disown "${pid}" 2>/dev/null || disown 2>/dev/null || true
+  printf '%s\n' "${pid}"
+}

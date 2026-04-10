@@ -29,7 +29,10 @@ if [[ -z "${host}" ]]; then
 fi
 
 if [[ -n "${MOCK_DIG_RESPONSES_FILE:-}" && -f "${MOCK_DIG_RESPONSES_FILE}" ]]; then
-  answer="$(awk -v wanted="${host}" '$1==wanted {print $2; exit}' "${MOCK_DIG_RESPONSES_FILE}")"
+  answer="$(awk -v wanted_server="${server}" -v wanted_host="${host}" '
+    NF >= 3 && $1 == wanted_server && $2 == wanted_host { print $3; exit }
+    NF >= 2 && $1 == wanted_host { print $2; exit }
+  ' "${MOCK_DIG_RESPONSES_FILE}")"
   if [[ -n "${answer}" ]]; then
     printf '%s\n' "${answer}"
   fi

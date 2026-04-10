@@ -7,6 +7,7 @@ shift || true
 
 default_iface="${MOCK_RESOLVECTL_DEFAULT_IFACE:-wlan0}"
 default_dns="${MOCK_RESOLVECTL_DEFAULT_DNS:-10.0.32.32 10.0.32.33}"
+dns_map_file="${MOCK_RESOLVECTL_DNS_MAP_FILE:-}"
 
 if [[ -n "${MOCK_RESOLVECTL_DEFAULT_IFACE_FILE:-}" && -f "${MOCK_RESOLVECTL_DEFAULT_IFACE_FILE}" ]]; then
   default_iface="$(tr -d '\r' <"${MOCK_RESOLVECTL_DEFAULT_IFACE_FILE}")"
@@ -15,18 +16,60 @@ if [[ -n "${MOCK_RESOLVECTL_DEFAULT_DNS_FILE:-}" && -f "${MOCK_RESOLVECTL_DEFAUL
   default_dns="$(tr '\n' ' ' <"${MOCK_RESOLVECTL_DEFAULT_DNS_FILE}" | xargs)"
 fi
 
+print_dns_map() {
+  if [[ -n "${dns_map_file}" && -f "${dns_map_file}" ]]; then
+    awk '
+      NF >= 2 {
+        iface = $1
+        printf "Link %d (%s):", NR + 1, iface
+        for (i = 2; i <= NF; i++) {
+          printf " %s", $i
+        }
+        printf "\n"
+      }
+    ' "${dns_map_file}"
+    return 0
+  fi
+
+  printf 'Link 3 (%s): %s\n' "${default_iface}" "${default_dns}"
+}
+
+print_iface_dns() {
+  local wanted_iface="${1:?missing iface}"
+  if [[ -n "${dns_map_file}" && -f "${dns_map_file}" ]]; then
+    awk -v wanted="${wanted_iface}" '
+      $1 == wanted {
+        printf "Link 3 (%s):", wanted
+        for (i = 2; i <= NF; i++) {
+          printf " %s", $i
+        }
+        printf "\n"
+        found = 1
+        exit
+      }
+      END {
+        if (!found) {
+          printf "Link 3 (%s):\n", wanted
+        }
+      }
+    ' "${dns_map_file}"
+    return 0
+  fi
+
+  if [[ "${wanted_iface}" == "${default_iface}" ]]; then
+    printf 'Link 3 (%s): %s\n' "${wanted_iface}" "${default_dns}"
+  else
+    printf 'Link 2 (%s):\n' "${wanted_iface}"
+  fi
+}
+
 case "${cmd}" in
   dns)
     if [[ $# -gt 0 ]]; then
-      iface="${1}"
-      if [[ "${iface}" == "${default_iface}" ]]; then
-        printf 'Link 3 (%s): %s\n' "${iface}" "${default_dns}"
-      else
-        printf 'Link 2 (%s):\n' "${iface}"
-      fi
+      print_iface_dns "${1}"
     else
       printf 'Global:\n'
-      printf 'Link 3 (%s): %s\n' "${default_iface}" "${default_dns}"
+      print_dns_map
     fi
     ;;
   default-route)

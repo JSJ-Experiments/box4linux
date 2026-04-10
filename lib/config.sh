@@ -18,6 +18,7 @@ BOX_DNS_ENHANCED_MODE=""
 BOX_DNS_COEXIST_MODE=""
 BOX_IPV6_ENABLED=""
 BOX_CAMPUS_DNS_MODE=""
+BOX_CAMPUS_DNS_SUFFIX_POLICY=""
 BOX_TAILSCALE_IFACE=""
 BOX_TAILNET_IPV4_CIDR=""
 BOX_TAILNET_IPV6_CIDR=""
@@ -119,6 +120,7 @@ config_defaults() {
   BOX_DNS_COEXIST_MODE="preserve_tailnet"
   BOX_IPV6_ENABLED="true"
   BOX_CAMPUS_DNS_MODE="auto"
+  BOX_CAMPUS_DNS_SUFFIX_POLICY="org_only"
   BOX_TAILSCALE_IFACE="tailscale0"
   BOX_TAILNET_IPV4_CIDR="100.64.0.0/10"
   BOX_TAILNET_IPV6_CIDR="fd7a:115c:a1e0::/48"
@@ -486,6 +488,14 @@ normalize_org_dns_mode() {
   esac
 }
 
+normalize_org_dns_suffix_policy() {
+  case "${1:-}" in
+    ""|org|org_only) printf 'org_only\n' ;;
+    best_match|link) printf 'best_match\n' ;;
+    *) printf '%s\n' "${1:-}" ;;
+  esac
+}
+
 box_active_default_iface() {
   local ip_cmd="${BOX_IP_CMD:-ip}"
   command -v "${ip_cmd}" >/dev/null 2>&1 || return 1
@@ -503,6 +513,28 @@ box_active_link_dns_servers() {
         if ($i ~ /^([0-9]{1,3}\.){3}[0-9]{1,3}$/) {
           print $i
         }
+      }
+    }
+  '
+}
+
+box_dns_link_ifaces() {
+  local resolvectl_cmd="${BOX_RESOLVECTL_CMD:-resolvectl}"
+  command -v "${resolvectl_cmd}" >/dev/null 2>&1 || return 1
+  "${resolvectl_cmd}" dns 2>/dev/null | awk '
+    /^Link [0-9]+ \([^)]*\):/ {
+      iface = $3
+      gsub(/^\(/, "", iface)
+      gsub(/\):$/, "", iface)
+      has_ipv4 = 0
+      for (i = 4; i <= NF; i++) {
+        if ($i ~ /^([0-9]{1,3}\.){3}[0-9]{1,3}$/) {
+          has_ipv4 = 1
+          break
+        }
+      }
+      if (iface != "" && has_ipv4) {
+        print iface
       }
     }
   '
@@ -528,6 +560,101 @@ box_is_private_ipv4() {
   return 1
 }
 
+box_org_dns_probe_count() {
+  local probe_host count=0
+  for probe_host in "${BOX_CAMPUS_DNS_PROBE_HOSTS[@]}"; do
+    [[ -n "${probe_host}" ]] || continue
+    ((count += 1))
+  done
+  printf '%s\n' "${count}"
+}
+
+box_org_dns_probe_score_for_iface() {
+  local iface="${1:-}"
+  local dns_server probe_host answer
+  local -a dns_servers=()
+  local score=0
+
+  [[ -n "${iface}" ]] || {
+    printf '0\n'
+    return 0
+  }
+
+  mapfile -t dns_servers < <(box_active_link_dns_servers "${iface}" || true)
+  if [[ "${#dns_servers[@]}" -eq 0 ]]; then
+    printf '0\n'
+    return 0
+  fi
+
+  for probe_host in "${BOX_CAMPUS_DNS_PROBE_HOSTS[@]}"; do
+    [[ -n "${probe_host}" ]] || continue
+    for dns_server in "${dns_servers[@]}"; do
+      answer="$(box_probe_host_via_dns "${dns_server}" "${probe_host}" || true)"
+      if [[ -n "${answer}" ]] && box_is_private_ipv4 "${answer}"; then
+        ((score += 1))
+        break
+      fi
+    done
+  done
+
+  printf '%s\n' "${score}"
+}
+
+box_detect_org_dns_iface() {
+  local iface required_score score default_iface first_full_match=""
+  local -a candidate_ifaces=()
+
+  required_score="$(box_org_dns_probe_count)"
+  [[ "${required_score}" -gt 0 ]] || return 1
+  default_iface="$(box_active_default_iface || true)"
+
+  mapfile -t candidate_ifaces < <(box_dns_link_ifaces || true)
+  if [[ "${#candidate_ifaces[@]}" -eq 0 ]]; then
+    [[ -n "${default_iface}" ]] && candidate_ifaces=("${default_iface}")
+  fi
+
+  for iface in "${candidate_ifaces[@]}"; do
+    [[ -n "${iface}" ]] || continue
+    score="$(box_org_dns_probe_score_for_iface "${iface}")"
+    if [[ "${score}" -eq "${required_score}" ]]; then
+      if [[ -z "${first_full_match}" ]]; then
+        first_full_match="${iface}"
+      fi
+      if [[ -n "${default_iface}" && "${iface}" == "${default_iface}" ]]; then
+        printf '%s\n' "${iface}"
+        return 0
+      fi
+    fi
+  done
+
+  [[ -n "${first_full_match}" ]] || return 1
+  printf '%s\n' "${first_full_match}"
+}
+
+box_best_org_dns_candidate_iface() {
+  local iface best_iface="" score best_score=0 default_iface
+  local -a candidate_ifaces=()
+  default_iface="$(box_active_default_iface || true)"
+
+  mapfile -t candidate_ifaces < <(box_dns_link_ifaces || true)
+  if [[ "${#candidate_ifaces[@]}" -eq 0 ]]; then
+    [[ -n "${default_iface}" ]] && candidate_ifaces=("${default_iface}")
+  fi
+
+  for iface in "${candidate_ifaces[@]}"; do
+    [[ -n "${iface}" ]] || continue
+    score="$(box_org_dns_probe_score_for_iface "${iface}")"
+    if [[ "${score}" -gt "${best_score}" ]] || \
+       ([[ "${score}" -eq "${best_score}" ]] && [[ -n "${default_iface}" && "${iface}" == "${default_iface}" ]] && [[ "${best_iface}" != "${default_iface}" ]]); then
+      best_score="${score}"
+      best_iface="${iface}"
+    fi
+  done
+
+  [[ -n "${best_iface}" ]] || return 1
+  printf '%s\n' "${best_iface}"
+}
+
 box_org_dns_mode_configured() {
   local mode
   if [[ "${#BOX_CAMPUS_DNS_SUFFIXES[@]}" -eq 0 ]]; then
@@ -539,8 +666,7 @@ box_org_dns_mode_configured() {
 }
 
 box_detect_org_dns_mode() {
-  local configured_mode iface dns_server probe_host answer
-  local -a dns_servers=()
+  local configured_mode detected_iface
 
   configured_mode="$(box_org_dns_mode_configured)"
   case "${configured_mode}" in
@@ -550,28 +676,24 @@ box_detect_org_dns_mode() {
       ;;
   esac
 
-  iface="$(box_active_default_iface || true)"
-  mapfile -t dns_servers < <(box_active_link_dns_servers "${iface}" || true)
-  if [[ "${#dns_servers[@]}" -eq 0 ]]; then
+  detected_iface="$(box_detect_org_dns_iface || true)"
+  if [[ -n "${detected_iface}" ]]; then
+    printf 'org\n'
+  else
     printf 'public\n'
-    return 0
   fi
-
-  for probe_host in "${BOX_CAMPUS_DNS_PROBE_HOSTS[@]}"; do
-    [[ -n "${probe_host}" ]] || continue
-    for dns_server in "${dns_servers[@]}"; do
-      answer="$(box_probe_host_via_dns "${dns_server}" "${probe_host}" || true)"
-      if [[ -n "${answer}" ]] && box_is_private_ipv4 "${answer}"; then
-        printf 'org\n'
-        return 0
-      fi
-    done
-  done
-
-  printf 'public\n'
 }
 
 box_org_dns_status_iface() {
+  local active_mode detected_iface
+  active_mode="$(box_detect_org_dns_mode)"
+  if [[ "${active_mode}" == "org" ]]; then
+    detected_iface="$(box_detect_org_dns_iface || true)"
+    if [[ -n "${detected_iface}" ]]; then
+      printf '%s\n' "${detected_iface}"
+      return 0
+    fi
+  fi
   box_active_default_iface || true
 }
 
@@ -656,6 +778,15 @@ validate_config() {
     *)
       log "ERROR" "config" "E_CONFIG_ORG_DNS_MODE" \
         "network org_dns_mode must be auto|org|public (legacy campus alias accepted): ${BOX_CAMPUS_DNS_MODE}"
+      return "${E_CONFIG}"
+      ;;
+  esac
+
+  case "$(normalize_org_dns_suffix_policy "${BOX_CAMPUS_DNS_SUFFIX_POLICY}")" in
+    org_only|best_match) ;;
+    *)
+      log "ERROR" "config" "E_CONFIG_ORG_DNS_SUFFIX_POLICY" \
+        "network org_dns_suffix_policy must be org_only|best_match: ${BOX_CAMPUS_DNS_SUFFIX_POLICY}"
       return "${E_CONFIG}"
       ;;
   esac
@@ -870,7 +1001,7 @@ load_config() {
     log "WARN" "config" "W_CONFIG_DEFAULTS" "no box.toml found; using defaults"
     validate_config
     export BOX_CONFIG_FILE BOX_CONFIG_SOURCE
-    export BOX_CORE BOX_NETWORK_MODE BOX_TPROXY_PORT BOX_REDIR_PORT BOX_DNS_PORT BOX_DNS_HIJACK_MODE BOX_DNS_ENHANCED_MODE BOX_DNS_COEXIST_MODE BOX_IPV6_ENABLED BOX_CAMPUS_DNS_MODE
+    export BOX_CORE BOX_NETWORK_MODE BOX_TPROXY_PORT BOX_REDIR_PORT BOX_DNS_PORT BOX_DNS_HIJACK_MODE BOX_DNS_ENHANCED_MODE BOX_DNS_COEXIST_MODE BOX_IPV6_ENABLED BOX_CAMPUS_DNS_MODE BOX_CAMPUS_DNS_SUFFIX_POLICY
     export BOX_TAILSCALE_IFACE BOX_TAILNET_IPV4_CIDR BOX_TAILNET_IPV6_CIDR BOX_TAILSCALE_DNS_RESOLVER BOX_TAILSCALE_FWMARK BOX_TAILSCALE_ROUTE_TABLE
     export BOX_FIREWALL_BACKEND BOX_ROUTE_TABLE BOX_ROUTE_PREF BOX_FWMARK BOX_BYPASS_PRIVATE_IP BOX_BYPASS_CN_IP BOX_BYPASS_CN_FILE
     export BOX_POLICY_ENABLED BOX_POLICY_PROXY_MODE BOX_POLICY_DEBOUNCE_SECONDS BOX_POLICY_USE_MODULE_ON_WIFI_DISCONNECT BOX_POLICY_DISABLE_MARKER
@@ -907,6 +1038,7 @@ load_config() {
   BOX_DNS_COEXIST_MODE="$(config_read_value "${BOX_CONFIG_FILE}" "network" "dns_coexist_mode" || printf '%s' "${BOX_DNS_COEXIST_MODE}")"
   BOX_IPV6_ENABLED="$(config_read_value "${BOX_CONFIG_FILE}" "network" "ipv6" || printf '%s' "${BOX_IPV6_ENABLED}")"
   BOX_CAMPUS_DNS_MODE="$(config_read_value_first "${BOX_CONFIG_FILE}" "network" "org_dns_mode" "campus_dns_mode" || printf '%s' "${BOX_CAMPUS_DNS_MODE}")"
+  BOX_CAMPUS_DNS_SUFFIX_POLICY="$(config_read_value_first "${BOX_CONFIG_FILE}" "network" "org_dns_suffix_policy" "campus_dns_suffix_policy" || printf '%s' "${BOX_CAMPUS_DNS_SUFFIX_POLICY}")"
   BOX_TAILSCALE_IFACE="$(config_read_value "${BOX_CONFIG_FILE}" "network" "tailscale_iface" || printf '%s' "${BOX_TAILSCALE_IFACE}")"
   BOX_TAILNET_IPV4_CIDR="$(config_read_value "${BOX_CONFIG_FILE}" "network" "tailnet_ipv4_cidr" || printf '%s' "${BOX_TAILNET_IPV4_CIDR}")"
   BOX_TAILNET_IPV6_CIDR="$(config_read_value "${BOX_CONFIG_FILE}" "network" "tailnet_ipv6_cidr" || printf '%s' "${BOX_TAILNET_IPV6_CIDR}")"
@@ -917,6 +1049,7 @@ load_config() {
   mapfile -t BOX_CAMPUS_DNS_PROBE_HOSTS < <(config_read_array_first "${BOX_CONFIG_FILE}" "network" "org_dns_probe_hosts" "campus_dns_probe_hosts" || printf '%s\n' "${BOX_CAMPUS_DNS_PROBE_HOSTS[@]}")
   mapfile -t BOX_CAMPUS_DNS_PUBLIC_SERVERS < <(config_read_array_first "${BOX_CONFIG_FILE}" "network" "org_dns_public_servers" "campus_dns_public_servers" || printf '%s\n' "${BOX_CAMPUS_DNS_PUBLIC_SERVERS[@]}")
   BOX_CAMPUS_DNS_MODE="$(normalize_org_dns_mode "${BOX_CAMPUS_DNS_MODE}")"
+  BOX_CAMPUS_DNS_SUFFIX_POLICY="$(normalize_org_dns_suffix_policy "${BOX_CAMPUS_DNS_SUFFIX_POLICY}")"
 
   BOX_FIREWALL_BACKEND="$(config_read_value "${BOX_CONFIG_FILE}" "firewall" "backend" || printf '%s' "${BOX_FIREWALL_BACKEND}")"
   BOX_ROUTE_TABLE="$(config_read_value "${BOX_CONFIG_FILE}" "firewall" "route_table" || printf '%s' "${BOX_ROUTE_TABLE}")"
@@ -1008,7 +1141,7 @@ load_config() {
   fi
 
   export BOX_CONFIG_FILE BOX_CONFIG_SOURCE
-  export BOX_CORE BOX_NETWORK_MODE BOX_TPROXY_PORT BOX_REDIR_PORT BOX_DNS_PORT BOX_DNS_HIJACK_MODE BOX_DNS_ENHANCED_MODE BOX_DNS_COEXIST_MODE BOX_IPV6_ENABLED BOX_CAMPUS_DNS_MODE
+  export BOX_CORE BOX_NETWORK_MODE BOX_TPROXY_PORT BOX_REDIR_PORT BOX_DNS_PORT BOX_DNS_HIJACK_MODE BOX_DNS_ENHANCED_MODE BOX_DNS_COEXIST_MODE BOX_IPV6_ENABLED BOX_CAMPUS_DNS_MODE BOX_CAMPUS_DNS_SUFFIX_POLICY
   export BOX_TAILSCALE_IFACE BOX_TAILNET_IPV4_CIDR BOX_TAILNET_IPV6_CIDR BOX_TAILSCALE_DNS_RESOLVER BOX_TAILSCALE_FWMARK BOX_TAILSCALE_ROUTE_TABLE
   export BOX_FIREWALL_BACKEND BOX_ROUTE_TABLE BOX_ROUTE_PREF BOX_FWMARK BOX_BYPASS_PRIVATE_IP BOX_BYPASS_CN_IP BOX_BYPASS_CN_FILE
   export BOX_POLICY_ENABLED BOX_POLICY_PROXY_MODE BOX_POLICY_DEBOUNCE_SECONDS BOX_POLICY_USE_MODULE_ON_WIFI_DISCONNECT BOX_POLICY_DISABLE_MARKER

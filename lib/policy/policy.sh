@@ -292,8 +292,7 @@ policy_enable() {
   fi
 
   rm -f "${pid_file}"
-  nohup "${BOXCTL_SELF_PATH}" policy monitor >>"${BOX_LOG_DIR}/policy.log" 2>&1 &
-  disown || true
+  spawn_detached_process "${BOX_LOG_DIR}/policy.log" "${BOXCTL_SELF_PATH}" policy monitor >/dev/null
 
   for attempt in $(seq 1 15); do
     sleep 0.2

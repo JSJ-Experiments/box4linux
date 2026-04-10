@@ -19,6 +19,13 @@ firewall_org_dns_iface() {
   box_org_dns_status_iface
 }
 
+firewall_org_dns_bypass_servers() {
+  local active_mode
+  active_mode="$(firewall_org_dns_mode_active)"
+  [[ "${active_mode}" == "org" ]] || return 0
+  box_org_dns_status_servers || true
+}
+
 firewall_bool_enabled() {
   case "${1:-}" in
     true|1) return 0 ;;

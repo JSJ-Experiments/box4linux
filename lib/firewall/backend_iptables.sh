@@ -339,6 +339,22 @@ backend_iptables_apply_tailscale_bypass() {
   # TODO(phase-3): add dedicated ip6tables/nft backend for explicit v6 chain rules.
 }
 
+backend_iptables_apply_org_dns_bypass() {
+  local dns_server
+  local -a dns_servers=()
+
+  mapfile -t dns_servers < <(firewall_org_dns_bypass_servers || true)
+  [[ "${#dns_servers[@]}" -gt 0 ]] || return 0
+
+  for dns_server in "${dns_servers[@]}"; do
+    [[ "${dns_server}" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]] || continue
+    backend_iptables_add_rule_checked mangle "${BOX_CHAIN_DNS_MANGLE}" -d "${dns_server}" -p udp --dport 53 -j RETURN
+    backend_iptables_add_rule_checked mangle "${BOX_CHAIN_DNS_MANGLE}" -d "${dns_server}" -p tcp --dport 53 -j RETURN
+    backend_iptables_add_rule_checked nat "${BOX_CHAIN_DNS_NAT}" -d "${dns_server}" -p udp --dport 53 -j RETURN
+    backend_iptables_add_rule_checked nat "${BOX_CHAIN_DNS_NAT}" -d "${dns_server}" -p tcp --dport 53 -j RETURN
+  done
+}
+
 backend_iptables_apply_kernel_bypass() {
   if firewall_bool_enabled "${BOX_BYPASS_PRIVATE_IP:-false}"; then
     if ! backend_iptables_apply_private_bypass; then
@@ -582,6 +598,12 @@ backend_iptables_apply_mode() {
     FW_TAILSCALE_BYPASS_APPLIED="true"
   else
     FW_TAILSCALE_BYPASS_APPLIED="false"
+  fi
+
+  if ! backend_iptables_apply_org_dns_bypass; then
+    FW_LAST_ERROR="failed to apply org dns bypass"
+    backend_iptables_cleanup || true
+    return "${E_FIREWALL_APPLY}"
   fi
 
   if ! backend_iptables_apply_mode_rules "${mode}"; then

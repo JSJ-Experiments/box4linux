@@ -273,6 +273,24 @@ EOF
   fi
 }
 
+backend_nft_build_org_dns_bypass_rules() {
+  local dns_server
+  local -a dns_servers=()
+
+  mapfile -t dns_servers < <(firewall_org_dns_bypass_servers || true)
+  [[ "${#dns_servers[@]}" -gt 0 ]] || return 0
+
+  for dns_server in "${dns_servers[@]}"; do
+    [[ "${dns_server}" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]] || continue
+    cat <<EOF
+add rule inet ${BOX_NFT_TABLE_INET} box_dns ip daddr ${dns_server} udp dport 53 return
+add rule inet ${BOX_NFT_TABLE_INET} box_dns ip daddr ${dns_server} tcp dport 53 return
+add rule ip ${BOX_NFT_TABLE_IP} box_dns ip daddr ${dns_server} udp dport 53 return
+add rule ip ${BOX_NFT_TABLE_IP} box_dns ip daddr ${dns_server} tcp dport 53 return
+EOF
+  done
+}
+
 backend_nft_build_ruleset() {
   local mode="${1:?missing mode}"
   local mark_value tailscale_mark tailscale_mask
@@ -311,6 +329,7 @@ EOF
 
   backend_nft_build_bypass_sets || return "${E_FIREWALL_APPLY}"
   backend_nft_build_bypass_rules || return "${E_FIREWALL_APPLY}"
+  backend_nft_build_org_dns_bypass_rules || return "${E_FIREWALL_APPLY}"
 
   if [[ "${BOX_DNS_COEXIST_MODE}" == "preserve_tailnet" ]]; then
     cat <<EOF

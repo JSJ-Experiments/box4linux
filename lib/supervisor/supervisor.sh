@@ -8,6 +8,7 @@ source "${BOX_LIB_DIR}/supervisor/adapter_mihomo.sh"
 source "${BOX_LIB_DIR}/supervisor/adapter_sing_box.sh"
 source "${BOX_LIB_DIR}/supervisor/mutator_mihomo.sh"
 source "${BOX_LIB_DIR}/supervisor/mutator_sing_box.sh"
+source "${BOX_LIB_DIR}/supervisor/resolver_runtime.sh"
 source "${BOX_LIB_DIR}/firewall/firewall.sh"
 
 service_pid_file() {
@@ -233,9 +234,9 @@ service_spawn_monitor() {
     return 0
   fi
 
-  nohup "${BOXCTL_SELF_PATH}" service monitor >>"${BOX_LOG_DIR}/service.log" 2>&1 &
-  printf '%s\n' "$!" >"${pid_file}"
-  log "INFO" "service" "SERVICE_MONITOR_STARTED" "service monitor started pid=$!"
+  pid="$(spawn_detached_process "${BOX_LOG_DIR}/service.log" "${BOXCTL_SELF_PATH}" service monitor)"
+  printf '%s\n' "${pid}" >"${pid_file}"
+  log "INFO" "service" "SERVICE_MONITOR_STARTED" "service monitor started pid=${pid}"
 }
 
 service_stop_monitor() {
@@ -351,6 +352,7 @@ service_start_locked() {
 
   if is_pid_alive "${existing_pid}"; then
     rendered_path="$(rendered_config_path)"
+    resolver_runtime_apply || true
     log "INFO" "service" "SERVICE_ALREADY_RUNNING" "service already running pid=${existing_pid}"
     write_runtime_snapshot "healthy" "${existing_pid}" "${rendered_path}"
     return 0
@@ -394,6 +396,16 @@ service_start_locked() {
     return "${E_FIREWALL_APPLY}"
   fi
 
+  if ! resolver_runtime_apply; then
+    log "ERROR" "service" "E_RESOLVER_APPLY" "resolver ownership apply failed; stopping core"
+    firewall_disable || true
+    kill -TERM "${new_pid}" >/dev/null 2>&1 || true
+    rm -f "${pid_file}"
+    resolver_runtime_restore || true
+    write_runtime_snapshot "failed" "0" "${rendered_path}"
+    return "${E_CORE_START}"
+  fi
+
   write_runtime_snapshot "healthy" "${new_pid}" "${rendered_path}"
   service_spawn_monitor || true
   log "INFO" "service" "SERVICE_STARTED" "service started core=${BOX_CORE} pid=${new_pid} overlay=${rendered_path}"
@@ -414,6 +426,7 @@ service_stop_locked() {
 
   service_stop_monitor
   firewall_disable || true
+  resolver_runtime_restore || true
 
   if is_pid_alive "${pid}"; then
     kill -TERM "${pid}" >/dev/null 2>&1 || true
@@ -470,6 +483,7 @@ service_reload_locked() {
   esac
 
   if [[ "${rc}" -eq 0 ]]; then
+    resolver_runtime_apply || true
     log "INFO" "service" "SERVICE_RELOADED" "service reloaded core=${BOX_CORE}"
     return 0
   fi
