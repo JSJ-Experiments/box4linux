@@ -449,6 +449,12 @@ assert_contains "${dryrun_output}" "add rule inet box_mangle box_main ip daddr @
 assert_contains "${dryrun_output}" "add rule ip box_nat box_main ip daddr @box_cn_v4 return"
 assert_line_order "${dryrun_output}" "add rule inet box_mangle box_main ip daddr @box_cn_v4 return" 'add rule inet box_mangle box_main return comment "BOX_POLICY_PLACEHOLDER"'
 assert_line_order "${dryrun_output}" "meta mark set 16777216" 'add rule inet box_mangle box_main return comment "BOX_POLICY_PLACEHOLDER"'
+assert_contains "${dryrun_output}" "add rule inet box_mangle output meta skuid 0 ip daddr 198.18.0.0/16 jump box_main"
+assert_contains "${dryrun_output}" "add rule ip box_nat output meta skuid 0 ip daddr 198.18.0.0/16 jump box_main"
+assert_line_order "${dryrun_output}" "add rule inet box_mangle output meta skuid 0 ip daddr 198.18.0.0/16 jump box_main" "add rule inet box_mangle output meta skuid 0 return"
+assert_line_order "${dryrun_output}" "add rule ip box_nat output meta skuid 0 ip daddr 198.18.0.0/16 jump box_main" "add rule ip box_nat output meta skuid 0 return"
+assert_line_order "${dryrun_output}" "add rule inet box_mangle output meta skuid 0 jump box_dns" "add rule inet box_mangle output meta skuid 0 return"
+assert_line_order "${dryrun_output}" "add rule ip box_nat output meta skuid 0 jump box_dns" "add rule ip box_nat output meta skuid 0 return"
 
 printf '[6/13] trace mode logs external commands with action context\n'
 BOX_TRACE_COMMANDS=1

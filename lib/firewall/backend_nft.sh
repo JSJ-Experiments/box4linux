@@ -6,6 +6,7 @@ set -euo pipefail
 
 BOX_NFT_TABLE_INET="box_mangle"
 BOX_NFT_TABLE_IP="box_nat"
+BOX_MIHOMO_FAKEIP_V4_CIDR="198.18.0.0/16"
 
 nft_cmd() {
   if [[ -n "${BOX_NFT_CMD:-}" ]]; then
@@ -286,6 +287,8 @@ add chain inet ${BOX_NFT_TABLE_INET} output { type route hook output priority ma
 add chain inet ${BOX_NFT_TABLE_INET} box_main
 add chain inet ${BOX_NFT_TABLE_INET} box_dns
 add rule inet ${BOX_NFT_TABLE_INET} prerouting jump box_main
+$(if [[ "${BOX_DNS_ENHANCED_MODE}" == "fake-ip" ]]; then printf 'add rule inet %s output meta skuid 0 ip daddr %s jump box_main\n' "${BOX_NFT_TABLE_INET}" "${BOX_MIHOMO_FAKEIP_V4_CIDR}"; fi)
+add rule inet ${BOX_NFT_TABLE_INET} output meta skuid 0 jump box_dns
 add rule inet ${BOX_NFT_TABLE_INET} output meta skuid 0 return
 add rule inet ${BOX_NFT_TABLE_INET} output jump box_main
 add rule inet ${BOX_NFT_TABLE_INET} box_main jump box_dns
@@ -297,6 +300,8 @@ add chain ip ${BOX_NFT_TABLE_IP} output { type nat hook output priority -100; po
 add chain ip ${BOX_NFT_TABLE_IP} box_main
 add chain ip ${BOX_NFT_TABLE_IP} box_dns
 add rule ip ${BOX_NFT_TABLE_IP} prerouting jump box_main
+$(if [[ "${BOX_DNS_ENHANCED_MODE}" == "fake-ip" ]]; then printf 'add rule ip %s output meta skuid 0 ip daddr %s jump box_main\n' "${BOX_NFT_TABLE_IP}" "${BOX_MIHOMO_FAKEIP_V4_CIDR}"; fi)
+add rule ip ${BOX_NFT_TABLE_IP} output meta skuid 0 jump box_dns
 add rule ip ${BOX_NFT_TABLE_IP} output meta skuid 0 return
 add rule ip ${BOX_NFT_TABLE_IP} output jump box_main
 add rule ip ${BOX_NFT_TABLE_IP} box_main jump box_dns
